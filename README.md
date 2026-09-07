@@ -1,3 +1,6 @@
+## Setup
+download any of the os choices generic cloud image, place it in the images folder and rename it to it's name in the OS Choices.qcow2 such as alma10_generic_cloud.qcow2 would become alma10.qcow2.
+
 ## Usage
 
 Run:
