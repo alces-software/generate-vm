@@ -1,5 +1,5 @@
 ## Setup
-download any of the os choices generic cloud image, create an images directory and place it in the images directory and rename it to it's name in the OS Choices .qcow2 such as alma10_generic_cloud.qcow2 would become alma10.qcow2.
+Use the `./generate-vm --fetch` command to download the VM images required.
 
 ## Usage
 
