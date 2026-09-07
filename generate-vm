@@ -1,0 +1,503 @@
+#!/bin/bash
+
+set -e
+
+NAME=""
+SIZE=""
+OS=""
+DEFAULT_USER=""
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
+VMPATH="/opt/vm"
+EXTERNALBRIDGE="ext"
+
+ALMA10_RAWIMAGE="./images/alma10.qcow2"
+ALMA9_RAWIMAGE="./images/alma9.qcow2"
+ALMA8_RAWIMAGE="./images/alma8.qcow2"
+ROCKY10_RAWIMAGE="./images/rocky10.qcow2"
+ROCKY9_RAWIMAGE="./images/rocky9.qcow2"
+ROCKY8_RAWIMAGE="./images/rocky8.qcow2"
+DEBIAN13_RAWIMAGE="./images/debian13.qcow2"
+DEBIAN12_RAWIMAGE="./images/debian12.qcow2"
+DEBIAN11_RAWIMAGE="./images/debian13.qcow2"
+ARCH_RAWIMAGE="./images/arch.qcow2"
+
+ROOT_PASSWORD="0p3nflight"
+
+CONFIG_FILE="./vm.conf"
+
+SSH_PUBLIC_KEY=""
+
+# ---------------------------------------------------------------------------
+# Functions
+# ---------------------------------------------------------------------------
+
+usage() {
+  echo "Usage:"
+  echo "  $0 -n NAME -u USER -s SIZE --os OS"
+  echo
+  echo "Options:"
+  echo "  -n, --name NAME                  VM name"
+  echo "  -u, --user USER                  Default username"
+  echo "  -s, --size SIZE                  Disk size, e.g. 128G"
+  echo "      --os OS                      Operating system: alma or arch"
+  echo "      --operating-system OS        Same as --os"
+  echo "      --ssh                        Public SSH key"
+  echo "      --stop                       Stops the specified vm"
+  echo "      --destroy                    Destroys and undefines specified vm"
+  echo "      --cleanup                    Deletes qcow2 and _config.iso of specified vm"
+  echo "      --recreate                   Destroys, undefines, deletes qcow2 and _config.iso of specified vm that creates vm again"
+  echo "  -h, --help                       Show this help"
+  echo
+  echo "OS Images:"
+  echo "alma10"
+  echo "alma9"
+  echo "alma8"
+  echo "arch"
+  echo "debian13"
+  echo "debian12"
+  echo "debian11"
+  echo "rocky10"
+  echo "rocky9"
+  echo "rocky8"
+  echo
+  echo "Example:"
+  echo "  $0 --name myvm --user dev --size 64G --os alma9 --ssh \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqq96Vvclff96Iq1vXOnFp6yS2/7uBwZ8W7aF7Xf9z\" "
+}
+
+error() {
+  echo "Error: $*" >&2
+  exit 1
+}
+
+# ---------------------------------------------------------------------------
+# Parse config file
+# ---------------------------------------------------------------------------
+
+if [[ -f "$CONFIG_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$CONFIG_FILE"
+fi
+
+# ---------------------------------------------------------------------------
+# Parse flags
+# ---------------------------------------------------------------------------
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -n|--name)
+      [[ -n "${2:-}" ]] || error "$1 requires a value"
+      NAME="$2"
+      shift 2
+      ;;
+
+    --name=*)
+      NAME="${1#*=}"
+      shift
+      ;;
+
+      --stop)
+    STOP_VM=true
+    shift ;;
+
+    --destroy)
+    DESTROY_VM=true
+    shift;;
+
+    --cleanup)
+    CLEAN_UP=true
+    shift;;
+
+    --recreate)
+    RECREATE=true
+    shift;;
+
+    -u|--user)
+      [[ -n "${2:-}" ]] || error "$1 requires a value"
+      DEFAULT_USER="$2"
+      shift 2
+      ;;
+
+    --user=*)
+      DEFAULT_USER="${1#*=}"
+      shift
+      ;;
+
+    -s|--size)
+      [[ -n "${2:-}" ]] || error "$1 requires a value"
+      SIZE="$2"
+      shift 2
+      ;;
+
+    --size=*)
+      SIZE="${1#*=}"
+      shift
+      ;;
+
+    --os|--operating-system)
+      [[ -n "${2:-}" ]] || error "$1 requires a value"
+      OS="$2"
+      shift 2
+      ;;
+
+    --os=*|--operating-system=*)
+      OS="${1#*=}"
+      shift
+      ;;
+
+    -h|--help)
+      usage
+      exit 0
+      ;;
+
+    --ssh)
+	[[ -n "${2:-}" ]] || error "$1 requires a value"
+	SSH_PUBLIC_KEY="$2"
+	shift 2
+	;;
+    --ssh=*)
+	SSH_PUBLIC_KEY="${1#*=}"
+	shift
+	;;
+    *)
+      error "Unknown option: $1"
+      ;;
+  esac
+done
+
+#---------------------------------------------------------------------------
+# Stop, Destroy, Cleanup, Recreate Commands
+#---------------------------------------------------------------------------
+
+if [ "$STOP_VM" = true ]; then
+  if [[ -z $NAME ]]; then
+    echo "Error: You must provide a VM name using --name before stopping it."
+    exit 1
+  fi
+  echo "stopping $NAME"
+  virsh shutdown "$NAME"
+  echo "stopped $NAME"
+  exit 0
+fi
+
+if [ "$DESTROY_VM" = true ]; then
+ if [[ -z $NAME ]]; then
+   echo "Error: You must provide a VM name using --name before stopping it."
+   exit 1
+ fi
+
+ while :
+ do
+  read -p "Please confirm you wish to destroy $NAME (Y/N) : " destroy_confirm
+  if [ "$destroy_confirm" = "Y" ] || [ "$destroy_confirm" = "y" ]; then
+	  virsh destroy "$NAME"
+	  virsh undefine "$NAME"
+	  exit 0
+  elif [ "$destroy_confirm" = "N" ] || [ "$destroy_confirm" = "n" ]; then
+	  echo "Aborting destruction of $NAME"
+	  exit 0
+  else
+	  echo "Please enter either y or n"
+  fi
+done
+fi
+
+if [ "$CLEAN_UP" = true ]; then
+	if [[ -z $NAME ]]; then
+		echo "Error: You must provide a VM name using --name before cleaning it up."
+		exit 1
+	fi
+	while :
+       	do
+		read -p "Please confirm you wish to clean up $NAME\'s files (Y/N) : " clean_confirm
+		if [ "$clean_confirm" = "Y" ] || [ "$clean_confirm" = "y" ]; then
+			echo "Cleaning up $NAME\'s files"
+			rm /opt/vm/${NAME}_config.iso
+			rm /opt/vm/${NAME}.qcow2
+			exit 0
+		elif [ "$clean_confirm" = "N" ] || [ "$clean_confirm" = "n"]; then
+			echo "Aborting clean up of $NAME\'s files"
+			exit 0
+		else
+			echo "Please enter either y or n"
+		fi
+	done
+fi
+
+if [ "$RECREATE" = true ]; then
+	if [[ -z $NAME ]]; then
+		echo "Error: You must provide a VM name using --name before recreating it."
+		exit 1
+	fi
+	while :
+       	do
+		read -p "Please confirm you wish to recreate $NAME (Y/N) : " recreate_confirm
+		if [ "$recreate_confirm" = "Y" ] || [ "$recreate_confirm" = "y" ]; then
+			echo "Recreating $NAME"
+			virsh destroy "$NAME"
+			virsh undefine "$NAME"
+			rm /opt/vm/${NAME}_config.iso
+			rm /opt/vm/${NAME}.qcow2
+			./${NAME}-create.sh
+			exit 0
+		elif [ "$recreate_confirm" = "N" ] || [ "$recreate_confirm" = "n" ]; then
+			echo "Aborting recreation of $NAME"
+			exit 0
+		else
+			echo "Please enter either y or n"
+		fi
+	done
+fi
+
+# ---------------------------------------------------------------------------
+# Validate arguments
+# ---------------------------------------------------------------------------
+
+[[ -n "$NAME" ]] || error "VM name is required. Use --name NAME"
+
+[[ -n "$DEFAULT_USER" ]] || error "Default user is required. Use --user USER"
+
+[[ -n "$SIZE" ]] || error "Disk size is required. Use --size SIZE"
+
+[[ -n "$SSH_PUBLIC_KEY" ]] || error "SSH_PUBLIC_KEY is required in ${CONFIG_FILE}"
+
+OS=$(printf '%s' "$OS" | tr '[:upper:]' '[:lower:]')
+
+case "$OS" in
+  alma10)
+    RAWIMAGE="$ALMA10_RAWIMAGE"
+    OS_VARIANT="almalinux10"
+    ;;
+  alma9)
+    RAWIMAGE="$ALMA9_RAWIMAGE"
+    OS_VARIANT="almalinux9"
+    ;;
+  alma8)
+   RAWIMAGE="$ALMA8_RAWIMAGE"
+   OS_VARIANT="almalinux8"
+   ;;
+  rocky10)
+   RAWIMAGE="$ROCKY10_RAWIMAGE"
+   OS_VARIANT="rocky10"
+   ;;
+  rocky9)
+   RAWIMAGE="$ROCKY9_RAWIMAGE"
+   OS_VARIANT="rocky9"
+   ;;
+  rocky8)
+   RAWIMAGE="$ROCKY8_RAWIMAGE"
+   OS_VARIANT="rocky8"
+   ;;
+  debian13)
+   RAWIMAGE="$DEBIAN13_RAWIMAGE"
+   OS_VARIANT="debian13"
+   ;;
+  debian12)
+   RAWIMAGE="$DEBIAN12_RAWIMAGE"
+   OS_VARIANT="debian12"
+   ;;
+  debian11)
+   RAWIMAGE="$DEBIAN11_RAWIMAGE"
+   OS_VARIANT="debian1"
+  ;;   
+  arch)
+    RAWIMAGE="$ARCH_RAWIMAGE"
+    OS_VARIANT="archlinux"
+    ;;
+
+  *)
+    error "Invalid operating system: $OS. Valid values are: alma or arch"
+    ;;
+esac
+
+# Basic name validation. This also prevents accidentally generating paths
+# containing / or other unexpected characters.
+if [[ ! "$NAME" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+  error "Invalid VM name: $NAME"
+fi
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
+IMAGEISO="/tmp/imageiso"
+CONFIGISO="${IMAGEISO}/config.iso"
+
+VM_SCRIPT="${PWD}/${NAME}-create.sh"
+
+VM_DISK="${VMPATH}/${NAME}.qcow2"
+VM_CONFIG_ISO="${VMPATH}/${NAME}_config.iso"
+
+# ---------------------------------------------------------------------------
+# Check prerequisites
+# ---------------------------------------------------------------------------
+
+if ! command -v mkisofs >/dev/null 2>&1; then
+  error "mkisofs is not installed"
+fi
+
+if ! command -v qemu-img >/dev/null 2>&1; then
+  error "qemu-img is not installed"
+fi
+
+if ! command -v virt-install >/dev/null 2>&1; then
+  error "You need to install libvirt virt-install"
+fi
+
+if [[ ! -f "$RAWIMAGE" ]]; then
+  error "Raw image does not exist: $RAWIMAGE"
+fi
+
+# ---------------------------------------------------------------------------
+# Generate the config ISO script
+# ---------------------------------------------------------------------------
+
+CONFIG_SCRIPT="/tmp/${NAME}-generate-config-iso.sh"
+
+echo "Generating config ISO script: ${CONFIG_SCRIPT}"
+
+cat > "$CONFIG_SCRIPT" <<EOF
+#!/bin/bash
+
+set -e
+
+echo "Generating config ISO"
+
+if [ -d /tmp/imageiso ]; then
+  rm -rf /tmp/imageiso
+fi
+
+mkdir -p /tmp/imageiso
+
+META=/tmp/imageiso/meta-data
+USER=/tmp/imageiso/user-data
+ISO=/tmp/imageiso/config.iso
+
+cat <<'METAEOF' > \$META
+instance-id: iid-${NAME}
+dsmode: local
+local-hostname: ${NAME}
+hostname: ${NAME}
+fqdn: ${NAME}.dmz.alces-software.com
+network:
+  config: disabled
+public-keys:
+  - ${SSH_PUBLIC_KEY}
+METAEOF
+
+cat <<'NETWORKEOF' > /tmp/imageiso/network-interfaces
+config: disabled
+network:
+  config: disabled
+NETWORKEOF
+
+cat <<'NETWORKEOF' > /tmp/imageiso/network-config
+config: disabled
+network:
+  config: disabled
+NETWORKEOF
+
+cat <<'USEREOF' > \$USER
+#cloud-config
+disable_root: 0
+ssh_pwauth: 1
+
+chpasswd:
+  list: |
+     root:${ROOT_PASSWORD}
+
+system_info:
+  default_user:
+    name: ${DEFAULT_USER}
+    lock_passwd: true
+    gecos: Local Administrator
+    groups: [wheel, adm, systemd-journal]
+    sudo: ["ALL=(ALL) NOPASSWD:ALL"]
+    shell: /bin/bash
+
+network:
+  config: disabled
+USEREOF
+
+mkisofs -o \$ISO -V cidata -J \$META \$USER
+
+echo "Created \$ISO"
+EOF
+
+chmod +x "$CONFIG_SCRIPT"
+
+"$CONFIG_SCRIPT"
+
+# ---------------------------------------------------------------------------
+# Generate VM creation script
+# ---------------------------------------------------------------------------
+
+echo "Generating VM creation script: ${VM_SCRIPT}"
+
+cat > "$VM_SCRIPT" <<EOF
+#!/bin/bash
+
+set -e
+
+VMNAME="${NAME}"
+EXTERNALBRIDGE="${EXTERNALBRIDGE}"
+CONFIGISO="${CONFIGISO}"
+RAWIMAGE="${RAWIMAGE}"
+
+VMPATH="${VMPATH}"
+VM_DISK="\${VMPATH}/\${VMNAME}.qcow2"
+VM_CONFIG_ISO="\${VMPATH}/\${VMNAME}_config.iso"
+
+if ! [ -x /usr/bin/virt-install ]; then
+  echo "You need to install libvirt virt-install" >&2
+  exit 1
+fi
+
+if [ ! -d "\${VMPATH}" ]; then
+  mkdir -p "\${VMPATH}"
+fi
+
+if [ -f "\${VM_DISK}" ]; then
+  echo "A Disk/VM by the name of \${VMNAME} already seems to exist" >&2
+  exit 1
+fi
+
+if [ -f "\${VM_CONFIG_ISO}" ]; then
+  echo "A config by that name already exists" >&2
+  exit 1
+fi
+
+cp -v "\${RAWIMAGE}" "\${VM_DISK}"
+cp -v "\${CONFIGISO}" "\${VM_CONFIG_ISO}"
+
+echo "Creating Disk.."
+qemu-img resize "\${VM_DISK}" "${SIZE}"
+
+virt-install \\
+  --name "\${VMNAME}" \\
+  --import \\
+  --ram 2048 \\
+  --disk "\${VM_DISK},device=disk,bus=virtio" \\
+  --disk "\${VM_CONFIG_ISO},device=cdrom,bus=scsi" \\
+  --vcpus 2 \\
+  --os-variant "${OS_VARIANT}" \\
+  --network "bridge=\${EXTERNALBRIDGE}" \\
+  --console pty,target_type=serial \\
+  --graphics vnc,listen=0.0.0.0,port=-1 \\
+  --noautoconsole
+
+virsh console \${VMNAME}
+EOF
+
+chmod +x "$VM_SCRIPT"
+
+echo
+echo "Config ISO created:"
+echo "  ${CONFIGISO}"
+echo
+echo "VM creation script generated:"
+echo "  ${VM_SCRIPT}"
+${VM_SCRIPT}
