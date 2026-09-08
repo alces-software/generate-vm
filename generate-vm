@@ -13,23 +13,27 @@ DEFAULT_USER=""
 
 VMPATH="/opt/vm"
 EXTERNALBRIDGE="ext"
-
-ALMA10_RAWIMAGE="./images/alma10.qcow2"
-ALMA9_RAWIMAGE="./images/alma9.qcow2"
-ALMA8_RAWIMAGE="./images/alma8.qcow2"
-ROCKY10_RAWIMAGE="./images/rocky10.qcow2"
-ROCKY9_RAWIMAGE="./images/rocky9.qcow2"
-ROCKY8_RAWIMAGE="./images/rocky8.qcow2"
-DEBIAN13_RAWIMAGE="./images/debian13.qcow2"
-DEBIAN12_RAWIMAGE="./images/debian12.qcow2"
-DEBIAN11_RAWIMAGE="./images/debian13.qcow2"
-ARCH_RAWIMAGE="./images/arch.qcow2"
+ALMA10_RAWIMAGE="/home/rnd/virsh-generator/images/alma10.qcow2"
+ALMA9_RAWIMAGE="/home/rnd/virsh-generator/images/alma9.qcow2"
+ALMA8_RAWIMAGE="/home/rnd/virsh-generator/images/alma8.qcow2"
+ROCKY10_RAWIMAGE="/home/rnd/virsh-generator/images/rocky10.qcow2"
+ROCKY9_RAWIMAGE="/home/rnd/virsh-generator/images/rocky9.qcow2"
+ROCKY8_RAWIMAGE="/home/rnd/virsh-generator/images/rocky8.qcow2"
+DEBIAN13_RAWIMAGE="/home/rnd/virsh-generator/images/debian13.qcow2"
+DEBIAN12_RAWIMAGE="/home/rnd/virsh-generator/images/debian12.qcow2"
+DEBIAN11_RAWIMAGE="/home/rnd/virsh-generator/images/debian13.qcow2"
+ARCH_RAWIMAGE="/home/rnd/virsh-generator/images/arch.qcow2"
 
 ROOT_PASSWORD="0p3nflight"
 
 CONFIG_FILE="./vm.conf"
 
 SSH_PUBLIC_KEY=""
+
+DISK2=""
+DISK2_SIZE=""
+MEM=""
+CPUS=""
 
 # ---------------------------------------------------------------------------
 # Functions
@@ -45,13 +49,18 @@ usage() {
   echo "  -s, --size SIZE                  Disk size, e.g. 128G"
   echo "      --os OS                      Operating system: alma or arch"
   echo "      --operating-system OS        Same as --os"
+  echo "      --cpus (Optional)				   The amount of cpu cores you want the virtual machine to have"
+  echo "      --memory (Optional)                     The amount of memory you want the virtual machine to have"
   echo "      --ssh                        Public SSH key"
+  echo "      --disk2  (Optional)                     Adds a second disk to the vm if --disk2size is not provided it defaults to 30G"
+  echo "      --disk2size (Optional)		   Allows the specification of the size of disk2"
+  echo "Commands:"
   echo "      --stop                       Stops the specified vm"
   echo "      --destroy                    Destroys and undefines specified vm"
   echo "      --cleanup                    Deletes qcow2 and _config.iso of specified vm"
   echo "      --recreate                   Destroys, undefines, deletes qcow2 and _config.iso of specified vm that creates vm again"
-  echo "      --fetch                      Fetches all VM Images from sources"
   echo "  -h, --help                       Show this help"
+  echo "      --fetch			   Fetches all VM Images from sources"
   echo
   echo "OS Images:"
   echo "alma10"
@@ -116,7 +125,7 @@ while [[ $# -gt 0 ]]; do
     RECREATE=true
     shift;;
 
- --fetch)
+    --fetch)
     FETCH=true
     shift;;
 
@@ -152,6 +161,38 @@ while [[ $# -gt 0 ]]; do
       OS="${1#*=}"
       shift
       ;;
+
+    --disk2)
+	DISK2="Yes"
+	shift
+	;;
+
+   --disk2size)
+	DISK2SIZE="$2"
+	shift 2
+	;;
+
+   --disk2size=*)
+	DISK2SIZE="${1#*=}"
+	shift 
+	;;
+
+   --memory)
+	MEM="$2"
+	shift 2
+	;;
+   --memory=*)
+	MEM="${1#*=}"
+	shift
+	;;
+   --cpus)
+       CPUS="$2"
+       shift 2
+       ;;
+   --cpus=*)
+       CPUS="${1#*=}"
+       shift
+       ;;
 
     -h|--help)
       usage
@@ -244,11 +285,12 @@ if [ "$RECREATE" = true ]; then
 			echo "Recreating $NAME"
 			virsh shutdown "$NAME"
 			sleep 1
-			virsh dumpxml --inactive "$NAME" > /tmp/recreated_vm.xml
+			virsh dumpxml --inactive "$NAME" >  /tmp/recreated_vm.xml
 			virsh undefine "$NAME"
 			virsh define /tmp/recreated_vm.xml
 			virsh start "$NAME"
 			virsh console "$NAME"
+
 			exit 0
 		elif [ "$recreate_confirm" = "N" ] || [ "$recreate_confirm" = "n" ]; then
 			echo "Aborting recreation of $NAME"
@@ -260,21 +302,21 @@ if [ "$RECREATE" = true ]; then
 fi
 
 if [ "$FETCH" = true ]; then
-        mkdir -p images
-        cd images
-        wget -O alma10.qcow2 https://repo.almalinux.org/almalinux/10/cloud/x86_64_v2/images/AlmaLinux-10-GenericCloud-latest.x86_64_v2.qcow2
-        wget -O alma9.qcow2 https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2
-        wget -O alma8.qcow2 https://repo.almalinux.org/almalinux/8/cloud/x86_64/images/AlmaLinux-8-GenericCloud-latest.x86_64.qcow2
-        wget -O arch.qcow2 https://fastly.mirror.pkgbuild.com/images/v20260901.583572/Arch-Linux-x86_64-cloudimg.qcow2
-        wget -O debian13.qcow2 https://cloud.debian.org/images/cloud/trixie/20260831-2587/debian-13-genericcloud-amd64-20260831-2587.qcow2
-        wget -O debian12.qcow2 https://cloud.debian.org/images/cloud/bookworm/20260903-2590/debian-12-genericcloud-amd64-20260903-2590.qcow2
-        wget -O debian11.qcow2 https://cloud.debian.org/images/cloud/bullseye/20260821-2577/debian-11-genericcloud-amd64-20260821-2577.qcow2
-        wget -O rocky10.qcow2 https://rockylinux.mirrorservice.org/pub/rocky/10.2/images/x86_64/Rocky-10-GenericCloud-Base.latest.x86_64.qcow2
-        wget -O rocky9.qcow2 https://rockylinux.mirrorservice.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud-Base.latest.x86_64.qcow2
-        wget -O rocky8.qcow2 https://rockylinux.mirrorservice.org/pub/rocky/8/images/x86_64/Rocky-8-GenericCloud-Base.latest.x86_64.qcow2
-        cd ..
-        echo "VM Images Successfully Downloaded"
-        exit 0
+	mkdir -p images
+	cd images
+	wget -O alma10.qcow2 https://repo.almalinux.org/almalinux/10/cloud/x86_64_v2/images/AlmaLinux-10-GenericCloud-latest.x86_64_v2.qcow2
+	wget -O alma9.qcow2 https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2
+	wget -O alma8.qcow2 https://repo.almalinux.org/almalinux/8/cloud/x86_64/images/AlmaLinux-8-GenericCloud-latest.x86_64.qcow2
+	wget -O arch.qcow2 https://fastly.mirror.pkgbuild.com/images/v20260901.583572/Arch-Linux-x86_64-cloudimg.qcow2
+	wget -O debian13.qcow2 https://cloud.debian.org/images/cloud/trixie/20260831-2587/debian-13-genericcloud-amd64-20260831-2587.qcow2
+	wget -O debian12.qcow2 https://cloud.debian.org/images/cloud/bookworm/20260903-2590/debian-12-genericcloud-amd64-20260903-2590.qcow2
+	wget -O debian11.qcow2 https://cloud.debian.org/images/cloud/bullseye/20260821-2577/debian-11-genericcloud-amd64-20260821-2577.qcow2
+	wget -O rocky10.qcow2 https://rockylinux.mirrorservice.org/pub/rocky/10.2/images/x86_64/Rocky-10-GenericCloud-Base.latest.x86_64.qcow2
+	wget -O rocky9.qcow2 https://rockylinux.mirrorservice.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud-Base.latest.x86_64.qcow2
+	wget -O rocky8.qcow2 https://rockylinux.mirrorservice.org/pub/rocky/8/images/x86_64/Rocky-8-GenericCloud-Base.latest.x86_64.qcow2
+	cd ..
+	echo "VM Images Successfully Downloaded"
+	exit 0
 fi
 
 # ---------------------------------------------------------------------------
@@ -445,6 +487,14 @@ system_info:
 
 network:
   config: disabled
+fs_setup:
+- label: data_disk
+  filesystem: 'ext4'
+  device: /dev/vdb
+  partition: auto
+
+mounts:
+- [ /dev/vdb, /mnt/data, "ext4", "defaults,nofail", "0", "2" ]
 USEREOF
 
 mkisofs -o \$ISO -V cidata -J \$META \$USER
@@ -457,8 +507,9 @@ chmod +x "$CONFIG_SCRIPT"
 "$CONFIG_SCRIPT"
 
 # ---------------------------------------------------------------------------
-# Generate VM
+# Generate VM creation script
 # ---------------------------------------------------------------------------
+
 bash <<EOF
 #!/bin/bash
 
@@ -468,10 +519,15 @@ VMNAME="${NAME}"
 EXTERNALBRIDGE="${EXTERNALBRIDGE}"
 CONFIGISO="${CONFIGISO}"
 RAWIMAGE="${RAWIMAGE}"
+MEM="${MEM}"
+CPUS="${CPUS}"
 
 VMPATH="${VMPATH}"
+DISK2="${DISK2}"
+DISK2SIZE="${DISK2SIZE}"
 VM_DISK="\${VMPATH}/\${VMNAME}.qcow2"
 VM_CONFIG_ISO="\${VMPATH}/\${VMNAME}_config.iso"
+DISK2_PATH="\${VMPATH}/\${VMNAME}-disk2.qcow2"
 
 if ! [ -x /usr/bin/virt-install ]; then
   echo "You need to install libvirt virt-install" >&2
@@ -495,23 +551,35 @@ fi
 cp -v "\${RAWIMAGE}" "\${VM_DISK}"
 cp -v "\${CONFIGISO}" "\${VM_CONFIG_ISO}"
 
-echo "Creating Disk.."
+echo "Creating Primary Disk.."
 qemu-img resize "\${VM_DISK}" "${SIZE}"
 
+DISK_ARGS=()
+
+if [ "\${DISK2:-}" = "Yes" ]; then
+	echo "Creating Second Disk.."
+	D2_SIZE="\${DISK2SIZE:-30G}"
+	qemu-img create -f qcow2 "\${DISK2_PATH}" "\${D2_SIZE}"
+	DISK_ARGS=(
+		--disk
+		"\${DISK2_PATH},device=disk,bus=virtio,target=vdb"
+	)
+fi
 virt-install \\
   --name "\${VMNAME}" \\
   --import \\
-  --ram 2048 \\
-  --disk "\${VM_DISK},device=disk,bus=virtio" \\
+  --ram "\${MEM:-2048}" \\
+  --disk "\${VM_DISK},device=disk,bus=virtio,target=vda,boot.order=1" \\
   --disk "\${VM_CONFIG_ISO},device=cdrom,bus=scsi" \\
-  --vcpus 2 \\
+  "\${DISK_ARGS[@]}" \\
+  --vcpus "\${CPUS:-2}" \\
   --os-variant "${OS_VARIANT}" \\
   --network "bridge=\${EXTERNALBRIDGE}" \\
   --console pty,target_type=serial \\
   --graphics vnc,listen=0.0.0.0,port=-1 \\
-  --noautoconsole
-
+  --noautoconsole 
 EOF
+
 echo
 echo "Config ISO created:"
 echo "  ${CONFIGISO}"
