@@ -242,11 +242,13 @@ if [ "$RECREATE" = true ]; then
 		read -p "Please confirm you wish to recreate $NAME (Y/N) : " recreate_confirm
 		if [ "$recreate_confirm" = "Y" ] || [ "$recreate_confirm" = "y" ]; then
 			echo "Recreating $NAME"
-			virsh destroy "$NAME"
+			virsh shutdown "$NAME"
+			sleep 1
+			virsh dumpxml --inactive "$NAME" > /tmp/recreated_vm.xml
 			virsh undefine "$NAME"
-			rm /opt/vm/${NAME}_config.iso
-			rm /opt/vm/${NAME}.qcow2
-			./${NAME}-create.sh
+			virsh define /tmp/recreated_vm.xml
+			virsh start "$NAME"
+			virsh console "$NAME"
 			exit 0
 		elif [ "$recreate_confirm" = "N" ] || [ "$recreate_confirm" = "n" ]; then
 			echo "Aborting recreation of $NAME"
@@ -455,12 +457,9 @@ chmod +x "$CONFIG_SCRIPT"
 "$CONFIG_SCRIPT"
 
 # ---------------------------------------------------------------------------
-# Generate VM creation script
+# Generate VM
 # ---------------------------------------------------------------------------
-
-echo "Generating VM creation script: ${VM_SCRIPT}"
-
-cat > "$VM_SCRIPT" <<EOF
+bash <<EOF
 #!/bin/bash
 
 set -e
@@ -512,15 +511,9 @@ virt-install \\
   --graphics vnc,listen=0.0.0.0,port=-1 \\
   --noautoconsole
 
-virsh console \${VMNAME}
 EOF
-
-chmod +x "$VM_SCRIPT"
-
 echo
 echo "Config ISO created:"
 echo "  ${CONFIGISO}"
-echo
-echo "VM creation script generated:"
-echo "  ${VM_SCRIPT}"
-${VM_SCRIPT}
+
+virsh console ${NAME}
