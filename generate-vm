@@ -1,7 +1,8 @@
 #!/bin/bash
 
 set -e
-
+red=$'\033[1;31m'  
+nc=$'\033[0m'
 NAME=""
 SIZE=""
 OS=""
@@ -77,6 +78,7 @@ usage() {
   echo "      --secondary-ip (Optional)		    Joins the vm to a libvirt only network with specified ip"
   echo "      Allows vms which have a secondary-ip set to communicate with each other"
   echo "Commands:"
+  echo "      --wizard                     Provides a guided virtual machine creation"
   echo "      --stop                       Stops the specified vm"
   echo "      --destroy                    Destroys and undefines specified vm"
   echo "      --cleanup                    Deletes qcow2 and _config.iso of specified vm"
@@ -137,6 +139,159 @@ is_valid_disk_size() {
 
 	[[ "$size" =~ ^[1-9][0-9]*G$ ]]
 }
+wizard() {
+    echo "===============Setup Wizard==============="
+
+    read -r -p "What would you like your virtual machine to be called? " vmName
+    NAME="$vmName"
+    clear
+
+    read -r -p "What would you like the primary user to be called? " userName
+    DEFAULT_USER="$userName"
+    clear
+    while :
+    do
+    	read -r -p "How large would you like the primary drive to be (in G e.g. 10G)? " primarySize
+	if is_valid_disk_size "$primarySize"; then
+		SIZE="$primarySize"
+		break
+	fi
+        echo -e "${red}Error: invalid disk size:${nc} $primarySize" >&2
+        echo -e "${red} Disk size must be a positive number followed by G, e.g. 10G or 100G${nc}" >&2
+    done
+    clear
+
+    read -r -p "Would you like the virtual machine to have another drive? " drive2
+
+    if [[ "$drive2" =~ ^([yY]|[yY][eE][sS])$ ]]; then
+        clear
+        DISK2="Yes"
+
+        while :
+	do
+        	read -r -p "How large would you like the secondary drive to be (in G e.g. 10G)? " secondarysize
+		if is_valid_disk_size "$secondarysize"; then
+			DISK2_SIZE="$secondarysize"
+			break
+		fi
+		echo -e "${red}Error: invalid disk size:${nc} $secondarysize" >&2
+		echo -e "${red}Disk size must be a positive number followed by G, e.g. 10G or 100G${nc}" >&2
+	done
+    fi
+
+    clear
+    while :
+    do
+    	read -r -p "How much memory would you like the virtual machine to have (in MB e.g. 2046)? " memsize
+        if [[ $memsize =~ ^[0-9]+$ ]]; then
+                MEM="$memsize"
+		break
+        else
+                echo -e "${red}Error: invalid memory amount:${nc} $memsize" >&2
+        fi
+    done
+    clear
+    
+    while :
+    do
+    	read -r -p "How many CPU cores would you like the virtual machine to have? " cpucores
+	if [[ $cpucores =~ ^[0-9]+$ ]]; then
+    		CPUS="$cpucores"
+		break
+	else
+		echo -e "${red}Error: invalid cpu core count:${nc} $cpucores" >&2
+	fi
+    done
+    clear
+
+    echo "================OS Choices==============="
+    echo "Alma: alma10,alma9,alma8"
+    echo "Arch: arch"
+    echo "CentOS: centos10, centos9"
+    echo "Debian: debian13, debian12, debian11"
+    echo "Rocky: rocky10, rocky9, rocky8"
+    echo "Ubuntu: ubuntu26, ubuntu25, ubuntu24"
+    echo
+
+    while :
+do
+    read -r -p "Which OS would you like the virtual machine to run? " oschoice
+
+    case "$oschoice" in
+        alma10|alma9|alma8|\
+        arch|\
+        centos10|centos9|\
+        debian13|debian12|debian11|\
+        rocky10|rocky9|rocky8|\
+        ubuntu26|ubuntu25|ubuntu24)
+            OS="$oschoice"
+            break
+            ;;
+        *)
+            echo -e "${red} Error: invalid OS choice:${nc} $oschoice" >&2
+            echo -e "${red} Please choose one of the listed operating systems.${nc}" >&2
+            ;;
+    esac
+done
+
+clear
+
+    while :
+do
+    read -r -p 'What is your public SSH key? ' sshkey
+
+    if ssh-keygen -l -f <(printf '%s\n' "$sshkey") >/dev/null 2>&1; then
+        SSH_PUBLIC_KEY="$sshkey"
+        break
+    fi
+
+    echo -e "${red}Error: invalid SSH public key.${nc}" >&2
+done
+
+clear
+
+    read -r -p "Would you like to include a secondary IP address? " ipaddrq
+
+    if [[ "$ipaddrq" =~ ^([yY]|[yY][eE][sS])$ ]]; then
+        clear
+	while :
+	do
+        	read -r -p "What would you like the secondary IP address to be (IPv4 format e.g. 10.0.0.1)? " net2ip
+		if is_valid_ipv4 "$net2ip"; then
+        		SECONDARY_IP="$net2ip"
+			break
+		else
+			echo -e "${red}Error: invalid ip:${nc} $net2ip" >&2
+		fi
+	done
+    fi
+
+    clear
+
+    cat << 'EOF'
+                  .
+
+                   .
+         /^\     .
+    /\   "V"
+   /__\   I      O  o
+  //..\\  I     .
+  \].`[/  I
+  /l\/j\  (]    .  O
+ /. ~~ ,\/I          .
+ \\L__j^\/I       o
+  \/--v}  I     o   .
+  |    |  I   _________
+  |    |  I c(`       ')o
+  |    l  I   \.     ,/
+_/j  L l\_!  _//^---^\\_  
+EOF
+    echo
+    echo
+    echo "Creating ${NAME}"
+    sleep 2
+}
+
 
 # ---------------------------------------------------------------------------
 # Parse config file
@@ -265,7 +420,7 @@ while [[ $# -gt 0 ]]; do
        if [[ $CPUS =~ ^[0-9]+$ ]]; then
 	       shift 2
        else
-	       echo "Error: invalid amount of CPU cores: $MEM" >&2
+	       echo "Error: invalid amount of CPU cores: $CPUS" >&2
        fi
        ;;
    --cpus=*)
@@ -297,6 +452,11 @@ while [[ $# -gt 0 ]]; do
       usage
       exit 0
       ;;
+
+--wizard)
+	wizard
+	shift
+	;;
 
     --ssh)
 	[[ -n "${2:-}" ]] || error "$1 requires a value"
