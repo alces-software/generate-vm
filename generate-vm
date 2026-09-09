@@ -21,8 +21,14 @@ ROCKY9_RAWIMAGE="/home/rnd/virsh-generator/images/rocky9.qcow2"
 ROCKY8_RAWIMAGE="/home/rnd/virsh-generator/images/rocky8.qcow2"
 DEBIAN13_RAWIMAGE="/home/rnd/virsh-generator/images/debian13.qcow2"
 DEBIAN12_RAWIMAGE="/home/rnd/virsh-generator/images/debian12.qcow2"
-DEBIAN11_RAWIMAGE="/home/rnd/virsh-generator/images/debian13.qcow2"
+DEBIAN11_RAWIMAGE="/home/rnd/virsh-generator/images/debian11.qcow2"
 ARCH_RAWIMAGE="/home/rnd/virsh-generator/images/arch.qcow2"
+CENTOS10_RAWIMAGE="/home/rnd/virsh-generator/images/centos10.qcow2"
+CENTOS9_RAWIMAGE="/home/rnd/virsh-generator/images/centos9.qcow2"
+UBUNTU26_RAWIMAGE="/home/rnd/virsh-generator/images/ubuntu26.qcow2"
+UBUNTU25_RAWIMAGE="/home/rnd/virsh-generator/images/ubuntu25.qcow2"
+UBUNTU24_RAWIMAGE="/home/rnd/virsh-generator/images/ubuntu24.qcow2"
+
 
 ROOT_PASSWORD="0p3nflight"
 
@@ -34,6 +40,16 @@ DISK2=""
 DISK2_SIZE=""
 MEM=""
 CPUS=""
+SECONDARY_IP=""
+PRIMARY_MAC="$(printf '52:54:00:%02x:%02x:%02x'\
+      	$((RANDOM%256))\
+      	$((RANDOM%256))\
+	$((RANDOM%256)))"
+
+SECONDARY_MAC="$(printf '52:54:00:%02x:%02x:%02x'\
+       	$((RANDOM%256))\
+       	$((RANDOM%256))\
+	$((RANDOM%256)))"
 
 # ---------------------------------------------------------------------------
 # Functions
@@ -58,6 +74,8 @@ usage() {
   echo "      if disk2 is not added as an option the vm will boot with 1 disk"
   echo "      --disk2size (Optional)               Allows the specification of the size of disk2"
   echo "      if disk2size is not added as an option but disk2 is the resulting disk will have a size of 30G"
+  echo "      --secondary-ip (Optional)		    Joins the vm to a libvirt only network with specified ip"
+  echo "      Allows vms which have a secondary-ip set to communicate with each other"
   echo "Commands:"
   echo "      --stop                       Stops the specified vm"
   echo "      --destroy                    Destroys and undefines specified vm"
@@ -71,12 +89,17 @@ usage() {
   echo "alma9"
   echo "alma8"
   echo "arch"
+  echo "centos10"
+  echo "centos9"
   echo "debian13"
   echo "debian12"
   echo "debian11"
   echo "rocky10"
   echo "rocky9"
   echo "rocky8"
+  echo "ubuntu26"
+  echo "ubuntu25"
+  echo "ubuntu24"
   echo
   echo "Example:"
   echo "  $0 --name myvm --user dev --size 64G --os alma9 --ssh \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqq96Vvclff96Iq1vXOnFp6yS2/7uBwZ8W7aF7Xf9z\" "
@@ -85,6 +108,34 @@ usage() {
 error() {
   echo "Error: $*" >&2
   exit 1
+}
+
+is_valid_ipv4(){
+	local ip="$1"
+	local IFS=.
+	local -a octets
+
+	read -r -a octets <<< "$ip"
+
+	[ "${#octets[@]}" -eq 4 ] || return 1
+
+	for octet in "${octets[@]}"; do
+
+	[[ "$octet" =~ ^[0-9]+$ ]] || return 1
+
+	[[ "$octet" =~ ^0$|^[1-9][0-9]*$ ]] || return 1
+
+	(( octet >= 0 && octet <= 255 )) || return 1
+
+	done
+
+	return 0
+}
+
+is_valid_disk_size() {
+	local size="$1"
+
+	[[ "$size" =~ ^[1-9][0-9]*G$ ]]
 }
 
 # ---------------------------------------------------------------------------
@@ -173,28 +224,72 @@ while [[ $# -gt 0 ]]; do
 
    --disk2size)
 	DISK2SIZE="$2"
+	if ! is_valid_disk_size "$DISK2SIZE"; then
+        echo "Error: invalid disk size: $DISK2SIZE" >&2
+        echo "Disk size must be a positive number followed by G, e.g. 10G or 100G" >&2
+        exit 1
+    fi
 	shift 2
 	;;
 
    --disk2size=*)
 	DISK2SIZE="${1#*=}"
+	if ! is_valid_disk_size "$DISK2SIZE"; then
+        echo "Error: invalid disk size: $DISK2SIZE" >&2
+        echo "Disk size must be a positive number followed by G, e.g. 10G or 100G" >&2
+        exit 1
+    fi
 	shift 
 	;;
 
    --memory)
 	MEM="$2"
-	shift 2
+	if [[ $MEM =~ ^[0-9]+$ ]]; then
+		shift 2
+	else
+		echo "Error: invalid memory amount: $MEM" >&2
+		exit 1
+	fi
 	;;
    --memory=*)
 	MEM="${1#*=}"
-	shift
+	if [[ $MEM =~ ^[0-9]+$ ]]; then
+		shift
+	else
+		echo "Error: invalid memory amount: $MEM" >&2
+		exit 1
+	fi
 	;;
    --cpus)
        CPUS="$2"
-       shift 2
+       if [[ $CPUS =~ ^[0-9]+$ ]]; then
+	       shift 2
+       else
+	       echo "Error: invalid amount of CPU cores: $MEM" >&2
+       fi
        ;;
    --cpus=*)
        CPUS="${1#*=}"
+       if [[ $CPUS =~ ^[0-9]+$ ]]; then
+               shift
+       else
+               echo "Error: invalid amount of CPU cores: $MEM" >&2
+       fi
+       ;;
+   --secondary-ip)
+       SECONDARY_IP="$2"
+       if ! is_valid_ipv4 "$SECONDARY_IP"; then
+        echo "Error: invalid IPv4 address: $SECONDARY_IP" >&2
+        exit 1
+    fi
+       shift 2
+       ;;
+   --secondary-ip=*)
+       SECONDARY_IP="${1#*=}"
+       if ! is_valid_ipv4 "$SECONDARY_IP"; then
+        echo "Error: invalid IPv4 address: $SECONDARY_IP" >&2
+        exit 1
+    fi
        shift
        ;;
 
@@ -267,6 +362,7 @@ if [ "$CLEAN_UP" = true ]; then
 			echo "Cleaning up $NAME\'s files"
 			rm /opt/vm/${NAME}_config.iso
 			rm /opt/vm/${NAME}.qcow2
+			rm -f /opt/vm/${NAME}-disk2.qcow2
 			exit 0
 		elif [ "$clean_confirm" = "N" ] || [ "$clean_confirm" = "n"]; then
 			echo "Aborting clean up of $NAME\'s files"
@@ -312,9 +408,14 @@ if [ "$FETCH" = true ]; then
 	wget -O alma9.qcow2 https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2
 	wget -O alma8.qcow2 https://repo.almalinux.org/almalinux/8/cloud/x86_64/images/AlmaLinux-8-GenericCloud-latest.x86_64.qcow2
 	wget -O arch.qcow2 https://fastly.mirror.pkgbuild.com/images/v20260901.583572/Arch-Linux-x86_64-cloudimg.qcow2
+	wget -O centos10.qcow2 https://cloud.centos.org/centos/10-stream/x86_64/images/CentOS-Stream-GenericCloud-10-latest.x86_64.qcow2
+	wget -O centos9.qcow2 https://cloud.centos.org/centos/9-stream/x86_64/images/CentOS-Stream-GenericCloud-9-latest.x86_64.qcow2
 	wget -O debian13.qcow2 https://cloud.debian.org/images/cloud/trixie/20260831-2587/debian-13-genericcloud-amd64-20260831-2587.qcow2
 	wget -O debian12.qcow2 https://cloud.debian.org/images/cloud/bookworm/20260903-2590/debian-12-genericcloud-amd64-20260903-2590.qcow2
 	wget -O debian11.qcow2 https://cloud.debian.org/images/cloud/bullseye/20260821-2577/debian-11-genericcloud-amd64-20260821-2577.qcow2
+	wget -O ubuntu26.qcow2 https://cloud-images.ubuntu.com/resolute/current/resolute-server-cloudimg-amd64v3.img
+	wget -O ubuntu25.qcow2 https://cloud-images.ubuntu.com/questing/current/questing-server-cloudimg-amd64.img
+	wget -O ubuntu24.qcow2 https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
 	wget -O rocky10.qcow2 https://rockylinux.mirrorservice.org/pub/rocky/10.2/images/x86_64/Rocky-10-GenericCloud-Base.latest.x86_64.qcow2
 	wget -O rocky9.qcow2 https://rockylinux.mirrorservice.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud-Base.latest.x86_64.qcow2
 	wget -O rocky8.qcow2 https://rockylinux.mirrorservice.org/pub/rocky/8/images/x86_64/Rocky-8-GenericCloud-Base.latest.x86_64.qcow2
@@ -378,9 +479,29 @@ case "$OS" in
     RAWIMAGE="$ARCH_RAWIMAGE"
     OS_VARIANT="archlinux"
     ;;
+  centos10)
+    RAWIMAGE="$CENTOS10_RAWIMAGE"
+    OS_VARIANT="centos-stream10"
+    ;;
+  centos9)
+    RAWIMAGE="$CENTOS9_RAWIMAGE"
+    OS_VARIANT="centos-stream9"
+    ;;
+  ubuntu26)
+    RAWIMAGE="$UBUNTU26_RAWIMAGE"
+    OS_VARIANT="ubuntu-stable-latest"
+    ;;
+  ubuntu25)
+    RAWIMAGE="$UBUNTU25_RAWIMAGE"
+    OS_VARIANT="ubuntuquesting"
+    ;;
+   ubuntu24)
+    RAWIMAGE="$UBUNTU24_RAWIMAGE"
+    OS_VARIANT="ubuntunoble"
+    ;;
 
   *)
-    error "Invalid operating system: $OS. Valid values are: alma or arch"
+    error "Invalid operating system: $OS. Valid values are: alma10, alma9, alma8, arch, centos10, centos9, debian13, debian12, debian11, rocky10, rocky9, rocky8, ubuntu26, ubuntu25, ubuntu24"
     ;;
 esac
 
@@ -425,7 +546,6 @@ fi
 # ---------------------------------------------------------------------------
 # Generate the config ISO script
 # ---------------------------------------------------------------------------
-
 CONFIG_SCRIPT="/tmp/${NAME}-generate-config-iso.sh"
 
 echo "Generating config ISO script: ${CONFIG_SCRIPT}"
@@ -446,6 +566,7 @@ mkdir -p /tmp/imageiso
 META=/tmp/imageiso/meta-data
 USER=/tmp/imageiso/user-data
 ISO=/tmp/imageiso/config.iso
+NET=/tmp/imageiso/network-config
 
 cat <<'METAEOF' > \$META
 instance-id: iid-${NAME}
@@ -453,23 +574,9 @@ dsmode: local
 local-hostname: ${NAME}
 hostname: ${NAME}
 fqdn: ${NAME}.dmz.alces-software.com
-network:
-  config: disabled
 public-keys:
   - ${SSH_PUBLIC_KEY}
 METAEOF
-
-cat <<'NETWORKEOF' > /tmp/imageiso/network-interfaces
-config: disabled
-network:
-  config: disabled
-NETWORKEOF
-
-cat <<'NETWORKEOF' > /tmp/imageiso/network-config
-config: disabled
-network:
-  config: disabled
-NETWORKEOF
 
 cat <<'USEREOF' > \$USER
 #cloud-config
@@ -478,19 +585,22 @@ ssh_pwauth: 1
 
 chpasswd:
   list: |
-     root:${ROOT_PASSWORD}
+    root:${ROOT_PASSWORD}
+    ${DEFAULT_USER}:${ROOT_PASSWORD}
 
 system_info:
   default_user:
     name: ${DEFAULT_USER}
-    lock_passwd: true
+    lock_passwd: false
     gecos: Local Administrator
     groups: [wheel, adm, systemd-journal]
     sudo: ["ALL=(ALL) NOPASSWD:ALL"]
     shell: /bin/bash
+USEREOF
 
-network:
-  config: disabled
+if [ "${DISK2:-}" = "Yes" ]; then
+
+cat <<'DISKEOF' >> "\$USER"
 fs_setup:
 - label: data_disk
   filesystem: 'ext4'
@@ -499,9 +609,35 @@ fs_setup:
 
 mounts:
 - [ /dev/vdb, /mnt/data, "ext4", "defaults,nofail", "0", "2" ]
-USEREOF
+DISKEOF
+fi
 
-mkisofs -o \$ISO -V cidata -J \$META \$USER
+cat <<'NETEOF' > "\$NET"
+version: 2
+ethernets:
+  primary:
+    match:
+      macaddress: "${PRIMARY_MAC}"
+    dhcp4: true
+    dhcp6: false
+NETEOF
+
+if [ -n "${SECONDARY_IP}" ]; then
+cat <<'NETEOF' >> "\$NET"
+  secondary:
+    match:
+      macaddress: "${SECONDARY_MAC}"
+    dhcp4: false
+    dhcp6: false
+    addresses:
+      - ${SECONDARY_IP}/24
+NETEOF
+fi
+
+echo "net config"
+cat "\$NET"
+
+mkisofs -o "\$ISO" -V cidata -J "\$META" "\$USER" "\$NET"
 
 echo "Created \$ISO"
 EOF
@@ -509,6 +645,8 @@ EOF
 chmod +x "$CONFIG_SCRIPT"
 
 "$CONFIG_SCRIPT"
+
+echo "end of config"
 
 # ---------------------------------------------------------------------------
 # Generate VM creation script
@@ -533,6 +671,9 @@ VM_DISK="\${VMPATH}/\${VMNAME}.qcow2"
 VM_CONFIG_ISO="\${VMPATH}/\${VMNAME}_config.iso"
 DISK2_PATH="\${VMPATH}/\${VMNAME}-disk2.qcow2"
 
+SECONDARY_NETWORK="secondary"
+SECONDARY_XML="/tmp/\${SECONDARY_NETWORK}.xml"
+SECONDARY_IP="${SECONDARY_IP:-}"
 if ! [ -x /usr/bin/virt-install ]; then
   echo "You need to install libvirt virt-install" >&2
   exit 1
@@ -552,6 +693,33 @@ if [ -f "\${VM_CONFIG_ISO}" ]; then
   exit 1
 fi
 
+if [ -n "${SECONDARY_IP}" ]; then
+	echo "Checking Libvirt secondary network"
+	
+	if ! virsh net-info "\${SECONDARY_NETWORK}" >/dev/null 2>&1; then
+		echo "Creating Libvirt secondary network"
+
+		printf '%s\n' \
+		'<network>' \
+		" <name>secondary</name>" \
+		' <bridge name="virbr-secondary"/>' \
+		'</network>' \
+		> "\${SECONDARY_XML}"
+		virsh net-define "\${SECONDARY_XML}"
+	fi
+virsh net-autostart secondary >/dev/null
+
+if ! virsh  net-info "\${SECONDARY_NETWORK}" \
+  | grep -q '^Active:.*yes'; then
+  
+  echo "Starting Libvirt secondary network"
+  virsh net-start "\${SECONDARY_NETWORK}"
+fi
+rm -f "\${SECONDARY_XML}"
+echo "Secondary network ready"
+fi	
+
+
 cp -v "\${RAWIMAGE}" "\${VM_DISK}"
 cp -v "\${CONFIGISO}" "\${VM_CONFIG_ISO}"
 
@@ -569,6 +737,20 @@ if [ "\${DISK2:-}" = "Yes" ]; then
 		"\${DISK2_PATH},device=disk,bus=virtio,target=vdb"
 	)
 fi
+
+NETWORK_ARGS=(
+	--network "bridge=${EXTERNALBRIDGE},mac=${PRIMARY_MAC}"
+)
+
+if [ -n "${SECONDARY_IP}" ]; then
+	echo "Adding secondary NIC on Libvirt network '\${SECONDARY_NETWORK}'"
+	
+	NETWORK_ARGS+=(
+		--network "network=\${SECONDARY_NETWORK},mac=${SECONDARY_MAC}"
+	)
+fi
+echo "NETWORK_ARGS:"
+printf ' %q\n' "\${NETWORK_ARGS[@]}"
 virt-install \\
   --name "\${VMNAME}" \\
   --import \\
@@ -578,7 +760,7 @@ virt-install \\
   "\${DISK_ARGS[@]}" \\
   --vcpus "\${CPUS:-2}" \\
   --os-variant "${OS_VARIANT}" \\
-  --network "bridge=\${EXTERNALBRIDGE}" \\
+  "\${NETWORK_ARGS[@]}" \\
   --console pty,target_type=serial \\
   --graphics vnc,listen=0.0.0.0,port=-1 \\
   --noautoconsole 
