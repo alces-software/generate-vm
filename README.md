@@ -11,12 +11,17 @@ Run:
 - alma9
 - alma8
 - arch
+- centos10
+- centos9
 - debian13
 - debian12
 - debian11
 - rocky10
 - rocky9
 - rocky8
+- ubuntu26
+- ubuntu25
+- ubuntu24
 
 ## Commands:
 
