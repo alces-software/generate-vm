@@ -42,6 +42,7 @@ DISK2_SIZE=""
 MEM=""
 CPUS=""
 SECONDARY_IP=""
+FILE_SHARING=""
 PRIMARY_MAC="$(printf '52:54:00:%02x:%02x:%02x'\
       	$((RANDOM%256))\
       	$((RANDOM%256))\
@@ -51,7 +52,7 @@ SECONDARY_MAC="$(printf '52:54:00:%02x:%02x:%02x'\
        	$((RANDOM%256))\
        	$((RANDOM%256))\
 	$((RANDOM%256)))"
-
+GRAPHICAL=""
 # ---------------------------------------------------------------------------
 # Functions
 # ---------------------------------------------------------------------------
@@ -77,6 +78,7 @@ usage() {
   echo "      if disk2size is not added as an option but disk2 is the resulting disk will have a size of 30G"
   echo "      --secondary-ip (Optional)		    Joins the vm to a libvirt only network with specified ip"
   echo "      Allows vms which have a secondary-ip set to communicate with each other"
+  echo "      --graphical-login (Optional)	    Setting for the generated vm to have a GUI"
   echo "Commands:"
   echo "      --wizard                     Provides a guided virtual machine creation"
   echo "      --stop                       Stops the specified vm"
@@ -139,6 +141,7 @@ is_valid_disk_size() {
 
 	[[ "$size" =~ ^[1-9][0-9]*G$ ]]
 }
+
 wizard() {
     echo "===============Setup Wizard==============="
 
@@ -268,6 +271,13 @@ clear
 
     clear
 
+    read -r -p "Would you like your vm to have a GUI? " gui
+
+    if [[ "$gui" =~ ^([yY]|[yY][eE][sS])$ ]]; then
+	    GRAPHICAL="Yes"
+    fi
+    clear
+
     cat << 'EOF'
                   .
 
@@ -377,6 +387,15 @@ while [[ $# -gt 0 ]]; do
 	shift
 	;;
 
+   --filesharing)
+	FILE_SHARING="Yes"
+	shift
+	;;
+   --graphical-login)
+	GRAPHICAL="Yes"
+	shift
+	;;
+
    --disk2size)
 	DISK2SIZE="$2"
 	if ! is_valid_disk_size "$DISK2SIZE"; then
@@ -453,7 +472,7 @@ while [[ $# -gt 0 ]]; do
       exit 0
       ;;
 
---wizard)
+    --wizard)
 	wizard
 	shift
 	;;
@@ -515,6 +534,11 @@ if [ "$CLEAN_UP" = true ]; then
 		echo "Error: You must provide a VM name using --name before cleaning it up."
 		exit 1
 	fi
+	desc=$(virsh desc "$NAME")
+	if [[ $desc != "created by generate-vm" ]]; then
+		echo "VM not created by this script"
+		exit 1
+	fi
 	while :
        	do
 		read -p "Please confirm you wish to clean up $NAME\'s files (Y/N) : " clean_confirm
@@ -538,6 +562,11 @@ if [ "$RECREATE" = true ]; then
 		echo "Error: You must provide a VM name using --name before recreating it."
 		exit 1
 	fi
+	desc=$(virsh desc "$NAME")
+        if [[ $desc != "created by generate-vm" ]]; then
+                echo "VM not created by this script"
+                exit 1
+        fi
 	while :
        	do
 		read -p "Please confirm you wish to recreate $NAME (Y/N) : " recreate_confirm
@@ -758,6 +787,23 @@ system_info:
     shell: /bin/bash
 USEREOF
 
+if [ "${FILE_SHARING}" = "Yes" ]; then
+
+cat <<'SHAREEOF' >> "$USER"
+
+bootcmd:
+  - mkdir -p /mnt/shared
+
+mounts:
+  - [ "hostshare", "/mnt/shared", "virtiofs", "defaults", "0", "0" ]
+SHAREEOF
+
+fi
+
+#=================================
+# Disk 2 Configuration
+#=================================
+
 if [ "${DISK2:-}" = "Yes" ]; then
 
 cat <<'DISKEOF' >> "\$USER"
@@ -766,11 +812,23 @@ fs_setup:
   filesystem: 'ext4'
   device: /dev/vdb
   partition: auto
+DISKEOF
 
+if [ "${FILE_SHARING}" = "Yes" ]; then
+    # Add another item to the existing mounts list
+    cat <<'DISKEOF' >> "\$USER"
+  - [ /dev/vdb, /mnt/data, "ext4", "defaults,nofail", "0", "2" ]
+DISKEOF
+else
+    cat <<'DISKEOF' >> "\$USER"
 mounts:
-- [ /dev/vdb, /mnt/data, "ext4", "defaults,nofail", "0", "2" ]
+  - [ /dev/vdb, /mnt/data, "ext4", "defaults,nofail", "0", "2" ]
 DISKEOF
 fi
+fi
+#==============================
+# Network Configuration
+#=============================
 
 cat <<'NETEOF' > "\$NET"
 version: 2
@@ -794,6 +852,101 @@ cat <<'NETEOF' >> "\$NET"
 NETEOF
 fi
 
+#================================
+# Graphical desktop configuration
+#================================
+if [ "${GRAPHICAL}" = "Yes" ]; then
+cat <<'GUIEOF' >> "\$USER"
+runcmd:
+  - |
+    set -e
+
+    echo "Installing graphical desktop environment"
+
+    . /etc/os-release
+
+    echo "Detected OS: \${ID}"
+    echo "OS version: \${VERSION_ID}"
+
+    case "\${ID}" in
+
+    alma|almalinux|rocky|centos)
+      echo "RHEL-family OS detected"
+
+      dnf -y group install "Server with GUI"
+      dnf -y install gdm
+
+      systemctl unmask gdm.service
+      systemctl enable gdm.service
+      systemctl set-default graphical.target
+      systemctl enable gdm
+      systemctl start gdm
+      ;;
+
+    arch)
+      echo "Arch Linux detected"
+
+      pacman -Syu --noconfirm \
+        gnome \
+        gdm \
+        xorg-server
+
+      systemctl unmask gdm.service
+      systemctl enable gdm.service
+      systemctl set-default graphical.target
+      systemctl enable gdm
+      systemctl start gdm
+      ;;
+
+    debian)
+      echo "Debian detected"
+
+      export DEBIAN_FRONTEND=noninteractive
+
+      apt-get update
+      apt-get install -y \
+        task-gnome-desktop \
+	gdm3
+
+      systemctl unmask gdm3.service
+      systemctl enable gdm3.service
+      systemctl set-default graphical.target
+      systemctl start gdm3.service
+      systemctl enable gdm3
+      systemctl start gdm3
+      ;;
+
+    ubuntu)
+      echo "Ubuntu detected"
+
+      export DEBIAN_FRONTEND=noninteractive
+
+      apt-get update
+      apt-get install -y \
+        gnome-shell \
+	gnome-session \
+	gnome-terminal \
+	gdm3
+
+      systemctl unmask gdm3.service
+      systemctl enable gdm3.service
+      systemctl set-default graphical.target
+      systemctl enable gdm3
+      systemctl start gdm3
+      ;;
+
+    *)
+      echo "ERROR: Unsupported OS: \${ID}"
+      exit 1
+      ;;
+
+    esac
+
+    echo "GUI installed"
+    systemctl get-default
+GUIEOF
+fi
+
 echo "net config"
 cat "\$NET"
 
@@ -806,8 +959,6 @@ chmod +x "$CONFIG_SCRIPT"
 
 "$CONFIG_SCRIPT"
 
-echo "end of config"
-
 # ---------------------------------------------------------------------------
 # Generate VM creation script
 # ---------------------------------------------------------------------------
@@ -816,6 +967,10 @@ bash <<EOF
 #!/bin/bash
 
 set -e
+
+#==============================================
+# Variables and dependency checking
+#==============================================
 
 VMNAME="${NAME}"
 EXTERNALBRIDGE="${EXTERNALBRIDGE}"
@@ -834,6 +989,7 @@ DISK2_PATH="\${VMPATH}/\${VMNAME}-disk2.qcow2"
 SECONDARY_NETWORK="secondary"
 SECONDARY_XML="/tmp/\${SECONDARY_NETWORK}.xml"
 SECONDARY_IP="${SECONDARY_IP:-}"
+
 if ! [ -x /usr/bin/virt-install ]; then
   echo "You need to install libvirt virt-install" >&2
   exit 1
@@ -853,32 +1009,10 @@ if [ -f "\${VM_CONFIG_ISO}" ]; then
   exit 1
 fi
 
-if [ -n "${SECONDARY_IP}" ]; then
-	echo "Checking Libvirt secondary network"
-	
-	if ! virsh net-info "\${SECONDARY_NETWORK}" >/dev/null 2>&1; then
-		echo "Creating Libvirt secondary network"
 
-		printf '%s\n' \
-		'<network>' \
-		" <name>secondary</name>" \
-		' <bridge name="virbr-secondary"/>' \
-		'</network>' \
-		> "\${SECONDARY_XML}"
-		virsh net-define "\${SECONDARY_XML}"
-	fi
-virsh net-autostart secondary >/dev/null
-
-if ! virsh  net-info "\${SECONDARY_NETWORK}" \
-  | grep -q '^Active:.*yes'; then
-  
-  echo "Starting Libvirt secondary network"
-  virsh net-start "\${SECONDARY_NETWORK}"
-fi
-rm -f "\${SECONDARY_XML}"
-echo "Secondary network ready"
-fi	
-
+#============================================
+# Disk Creation 
+#============================================
 
 cp -v "\${RAWIMAGE}" "\${VM_DISK}"
 cp -v "\${CONFIGISO}" "\${VM_CONFIG_ISO}"
@@ -898,36 +1032,104 @@ if [ "\${DISK2:-}" = "Yes" ]; then
 	)
 fi
 
+#==========================================
+# file sharing
+#==========================================
+
+FILESHARE_ARGS=()
+
+if [ "${FILE_SHARING}" = "Yes" ]; then
+	echo "Setting up filesharing"
+	SHARED_DIR="/home/rnd/virsh-generator/shared-files/${NAME}"
+	mkdir -p "\${SHARED_DIR}"
+	FILESHARE_ARGS=(--filesystem \${SHARED_DIR},target.dir=hostshare,driver.type=virtiofs
+	)
+fi
+
+if [ "${FILE_SHARING}" = "Yes" ]; then
+	MEMORY_ARGS=(
+		--memorybacking source.type=memfd,access.mode=shared
+	)
+fi
+
+#========================================
+# display
+#========================================
+
+DISPLAY_ARGS=()
+
+if [ "${GRAPHICAL}" = "Yes" ]; then
+	echo "Graphical mode enabled"
+	
+	DISPLAY_ARGS=(
+	    --graphics "vnc,listen=0.0.0.0,port=1,passwd='secret12'"
+	    --video vga
+	)
+else
+	echo "Console mode enabled"
+	
+	DISPLAY_ARGS=(
+	    --console pty,target_type=serial
+	)
+fi
+
+#===========================================
+# Virt-install command
+#===========================================
 NETWORK_ARGS=(
-	--network "bridge=${EXTERNALBRIDGE},mac=${PRIMARY_MAC}"
+    --network "bridge=${EXTERNALBRIDGE},mac=${PRIMARY_MAC}"
 )
 
 if [ -n "${SECONDARY_IP}" ]; then
-	echo "Adding secondary NIC on Libvirt network '\${SECONDARY_NETWORK}'"
-	
-	NETWORK_ARGS+=(
-		--network "network=\${SECONDARY_NETWORK},mac=${SECONDARY_MAC}"
-	)
+    echo "Adding secondary network on bridge vm-secondary"
+
+    NETWORK_ARGS+=(
+        --network "bridge=vm-secondary,mac=${SECONDARY_MAC}"
+    )
 fi
 echo "NETWORK_ARGS:"
 printf ' %q\n' "\${NETWORK_ARGS[@]}"
 virt-install \\
+  --connect qemu:///session \\
   --name "\${VMNAME}" \\
   --import \\
   --ram "\${MEM:-2048}" \\
+  "\${MEMORY_ARGS[@]}" \\
   --disk "\${VM_DISK},device=disk,bus=virtio,target=vda,boot.order=1" \\
   --disk "\${VM_CONFIG_ISO},device=cdrom,bus=scsi" \\
   "\${DISK_ARGS[@]}" \\
   --vcpus "\${CPUS:-2}" \\
   --os-variant "${OS_VARIANT}" \\
   "\${NETWORK_ARGS[@]}" \\
+  "\${FILESHARE_ARGS[@]}" \\
+  --video vga \\
   --console pty,target_type=serial \\
-  --graphics vnc,listen=0.0.0.0,port=-1 \\
-  --noautoconsole 
+  --metadata title="${NAME} created by generate-vm",description="created by generate-vm" \\
+--graphics vnc,listen=0.0.0.0,port=-1,passwd='secret45' \\
+--noautoconsole 
 EOF
 
 echo
 echo "Config ISO created:"
 echo "  ${CONFIGISO}"
 
-virsh console ${NAME}
+echo
+echo "=========================================="
+echo "VM created: ${NAME}"
+echo "=========================================="
+
+VNC_DISPLAY=$(virsh vncdisplay "${NAME}" 2>/dev/null || true)
+
+if [ -n "${VNC_DISPLAY}" ]; then
+    VNC_PORT=$((5900 + ${VNC_DISPLAY#:}))
+
+    echo "VNC display : ${VNC_DISPLAY}"
+    echo "VNC port    : ${VNC_PORT}"
+    echo "VNC address : $(hostname -s):${VNC_PORT}"
+fi
+
+if [ "${GRAPHICAL}" = "Yes" ]; then
+	echo "Please wait 4-5 mins before attempting to connect to allow the gui packages to be installed and boot"
+fi
+echo
+echo "to connect to ${NAME} on your machine enter: open \"vnc://secret45@$(hostname -s):${VNC_PORT}\""
