@@ -425,10 +425,6 @@ while [[ $# -gt 0 ]]; do
     DESTROY_VM=true
     shift;;
 
-    --cleanup)
-    CLEAN_UP=true
-    shift;;
-
     --recreate)
     RECREATE=true
     shift;;
@@ -610,60 +606,57 @@ if [ "$DESTROY_VM" = true ]; then
    exit 1
  fi
 
- while :
- do
-  read -p "Please confirm you wish to destroy $NAME (Y/N) : " destroy_confirm
-  if [ "$destroy_confirm" = "Y" ] || [ "$destroy_confirm" = "y" ]; then
-	  virsh destroy "$NAME"
-	  while :
-	  do
-	  read -p "Please confirm you wish to undefine $NAME (Y/N) : " undefine_confirm
-	  if [ "$undefine_confirm" = "Y" ] || [ "$undefine_confirm" = "y" ]; then
-	  	virsh undefine "$NAME"
-		exit 0
-	  elif [ "$undefine_confirm" = "N" ] || [ "$undefine_confirm" = "n" ]; then
-		  echo "$NAME destroyed but not undefined"
-		  exit 0
-	  else
-		  echo "Please enter either y or n"
-	  fi
-  done
-  elif [ "$destroy_confirm" = "N" ] || [ "$destroy_confirm" = "n" ]; then
-	  echo "Aborting destruction of $NAME"
-	  exit 0
-  else
-	  echo "Please enter either y or n"
-  fi
-done
-fi
-
-if [ "$CLEAN_UP" = true ]; then
-	if [[ -z $NAME ]]; then
-		echo "Error: You must provide a VM name using --name before cleaning it up."
-		exit 1
-	fi
 	desc=$(virsh desc "$NAME")
 	if [[ $desc != "created by generate-vm" ]]; then
 		echo "VM not created by this script"
 		exit 1
 	fi
-	while :
-       	do
-		read -p "Please confirm you wish to clean up $NAME\'s files (Y/N) : " clean_confirm
-		if [ "$clean_confirm" = "Y" ] || [ "$clean_confirm" = "y" ]; then
-			echo "Cleaning up $NAME\'s files"
-			rm /opt/vm/${NAME}_config.iso
-			rm /opt/vm/${NAME}.qcow2
-			rm -f /opt/vm/${NAME}-disk2.qcow2
-			release_primary_ip "${NAME}"
-			exit 0
-		elif [ "$clean_confirm" = "N" ] || [ "$clean_confirm" = "n"]; then
-			echo "Aborting clean up of $NAME\'s files"
-			exit 0
-		else
-			echo "Please enter either y or n"
-		fi
-	done
+
+
+ while :
+ do
+  read -p "Please confirm you wish to destroy $NAME (Y/N) : " destroy_confirm
+  if [ "$destroy_confirm" = "Y" ] || [ "$destroy_confirm" = "y" ]; then
+	  virsh destroy "$NAME"
+	  break
+  elif [ "$destroy_confirm" = "N" ] || [ "$destroy_confirm" = "n" ]; then
+	  break
+  else
+	  echo "Please enter either y or n"
+  fi
+ done
+	  while :
+	  do
+	  read -p "Please confirm you wish to undefine $NAME (Y/N) : " undefine_confirm
+	  if [ "$undefine_confirm" = "Y" ] || [ "$undefine_confirm" = "y" ]; then
+	  	virsh undefine "$NAME"
+		break
+	  elif [ "$undefine_confirm" = "N" ] || [ "$undefine_confirm" = "n" ]; then
+		  break
+	  else
+		  echo "Please enter either y or n"
+	  fi
+  done
+  while :
+  do
+	  echo "cleanup will remove: /opt/vm/${NAME}_config.iso, /opt/vm/${NAME}.qcow2, /opt/vm/${NAME}-disk2.qcow2 if they exist"
+	  read -p "Please confirm you wish to cleanup files related to $NAME and release it's IP (Y/N) : " cleanup_confirm
+	  if [ "$cleanup_confirm" = "Y" ] || [ "$cleanup_confirm" = "y" ]; then
+		echo "Cleaning up $NAME\'s files"
+		rm -f /opt/vm/${NAME}_config.iso
+		rm -f /opt/vm/${NAME}.qcow2
+		rm -f /opt/vm/${NAME}-disk2.qcow2
+		release_primary_ip "${NAME}"
+		exit 0
+	  elif [ "$cleanup_confirm" = "N" ] || [ "$cleanup_confirm" = "n" ]; then
+		  exit 0
+	  else
+		  echo "Please enter either y or n"
+	fi
+
+
+
+  done
 fi
 
 if [ "$RECREATE" = true ]; then
