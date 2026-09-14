@@ -29,6 +29,7 @@ CENTOS9_RAWIMAGE="/home/rnd/virsh-generator/images/centos9.qcow2"
 UBUNTU26_RAWIMAGE="/home/rnd/virsh-generator/images/ubuntu26.qcow2"
 UBUNTU25_RAWIMAGE="/home/rnd/virsh-generator/images/ubuntu25.qcow2"
 UBUNTU24_RAWIMAGE="/home/rnd/virsh-generator/images/ubuntu24.qcow2"
+LEAP16_RAWIMAGE="/home/rnd/virsh-generator/images/leap16.qcow2"
 
 
 ROOT_PASSWORD="0p3nflight"
@@ -53,6 +54,16 @@ SECONDARY_MAC="$(printf '52:54:00:%02x:%02x:%02x'\
        	$((RANDOM%256))\
 	$((RANDOM%256)))"
 GRAPHICAL=""
+CONSOLE=""
+PRIMARY_NETWORK_MODE=""
+PRIMARY_IP_RANGE_START="10.151.44.10"
+PRIMARY_IP_RANGE_END="10.151.44.250"
+PRIMARY_NETMASK="16"
+PRIMARY_GATEWAY="10.151.0.1"
+PRIMARY_DNS="10.151.0.1"
+IP_ALLOCATIONS_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/virsh-generator"
+IP_ALLOCATIONS_FILE="${IP_ALLOCATIONS_DIR}/primary-ip-allocations"
+IP_ALLOCATIONS_LOCK="${IP_ALLOCATIONS_DIR}/primary-ip.lock"
 # ---------------------------------------------------------------------------
 # Functions
 # ---------------------------------------------------------------------------
@@ -79,6 +90,8 @@ usage() {
   echo "      --secondary-ip (Optional)		    Joins the vm to a libvirt only network with specified ip"
   echo "      Allows vms which have a secondary-ip set to communicate with each other"
   echo "      --graphical-login (Optional)	    Setting for the generated vm to have a GUI"
+  echo "      --console (Optional)                  Boots into virsh console making it easy to get the ssh address of the vm"
+  echo "      --static (Optional) 		    Sets the primary network interface to static mode picking from ips 10.151.44.[10-250] instead of using DHCP"
   echo "Commands:"
   echo "      --wizard                     Provides a guided virtual machine creation"
   echo "      --stop                       Stops the specified vm"
@@ -104,6 +117,7 @@ usage() {
   echo "ubuntu26"
   echo "ubuntu25"
   echo "ubuntu24"
+  echo "leap16"
   echo
   echo "Example:"
   echo "  $0 --name myvm --user dev --size 64G --os alma9 --ssh \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqq96Vvclff96Iq1vXOnFp6yS2/7uBwZ8W7aF7Xf9z\" "
@@ -214,6 +228,7 @@ wizard() {
     echo "Debian: debian13, debian12, debian11"
     echo "Rocky: rocky10, rocky9, rocky8"
     echo "Ubuntu: ubuntu26, ubuntu25, ubuntu24"
+    echo "Leap: leap16"
     echo
 
     while :
@@ -226,7 +241,8 @@ do
         centos10|centos9|\
         debian13|debian12|debian11|\
         rocky10|rocky9|rocky8|\
-        ubuntu26|ubuntu25|ubuntu24)
+        ubuntu26|ubuntu25|ubuntu24|\
+	leap16)
             OS="$oschoice"
             break
             ;;
@@ -253,6 +269,22 @@ done
 
 clear
 
+while :
+do
+	read -r -p "Would you like to use dhcp on the primary interface? " dhcp
+	if [[ $dhcp = "Yes" || $dhcp = "yes" ]]; then
+		break
+	elif [[ $dhcp = "No" || $dhcp = "no" ]]; then
+		CONSOLE="STATIC"
+		break
+	else
+		echo -e "${red}Error: invalid response: ${nc} $dhcp" >&2
+	fi
+done
+
+
+clear
+
     read -r -p "Would you like to include a secondary IP address? " ipaddrq
 
     if [[ "$ipaddrq" =~ ^([yY]|[yY][eE][sS])$ ]]; then
@@ -271,12 +303,28 @@ clear
 
     clear
 
-    read -r -p "Would you like your vm to have a GUI? " gui
+    while :
+    do
+	    read -r -p "Would you ike to connect via vnc or ssh? " connectchoice
+	    if [[ $connectchoice = "ssh"  ||  $connectchoice = "SSH" ]]; then
+		    CONSOLE="Yes"
+		    break
+            elif [[ $connectchoice = "VNC"  || $connectchoice = "vnc" ]]; then
+		    break
+            else
+		    echo -e "${red}Error: invalid input: ${nc} $connectchoice"
+	    fi
+    done
 
-    if [[ "$gui" =~ ^([yY]|[yY][eE][sS])$ ]]; then
-	    GRAPHICAL="Yes"
-    fi
     clear
+    if [[ $CONSOLE != "Yes" ]]; then
+    	read -r -p "Would you like your vm to have a GUI? " gui
+
+    	if [[ "$gui" =~ ^([yY]|[yY][eE][sS])$ ]]; then
+	    	GRAPHICAL="Yes"
+    	fi
+    	clear
+    fi
 
     cat << 'EOF'
                   .
@@ -301,7 +349,47 @@ EOF
     echo "Creating ${NAME}"
     sleep 2
 }
+release_primary_ip() {
+    local vm_name="${1:-${NAME}}"
 
+    if [ -z "${vm_name}" ]; then
+        echo "ERROR: VM name is required" >&2
+        return 1
+    fi
+
+    mkdir -p "${IP_ALLOCATIONS_DIR}"
+    touch "${IP_ALLOCATIONS_FILE}"
+
+    (
+        flock -x 9
+
+        local existing
+
+        existing=$(awk -v vm="${vm_name}" '
+            $2 == vm {
+                print $0
+                exit
+            }
+        ' "${IP_ALLOCATIONS_FILE}")
+
+        if [ -z "${existing}" ]; then
+            echo "No IP allocation found for ${vm_name}"
+            exit 0
+        fi
+
+        echo "Releasing IP allocation:"
+        echo "  ${existing}"
+
+        awk -v vm="${vm_name}" '
+            $2 != vm
+        ' "${IP_ALLOCATIONS_FILE}" > "${IP_ALLOCATIONS_FILE}.tmp"
+
+        mv "${IP_ALLOCATIONS_FILE}.tmp" "${IP_ALLOCATIONS_FILE}"
+
+        echo "IP released for ${vm_name}"
+
+    ) 9>"${IP_ALLOCATIONS_LOCK}"
+}
 
 # ---------------------------------------------------------------------------
 # Parse config file
@@ -384,6 +472,11 @@ while [[ $# -gt 0 ]]; do
 
     --disk2)
 	DISK2="Yes"
+	shift
+	;;
+
+   --console)
+        CONSOLE="Yes"
 	shift
 	;;
 
@@ -486,6 +579,10 @@ while [[ $# -gt 0 ]]; do
 	SSH_PUBLIC_KEY="${1#*=}"
 	shift
 	;;
+   --static)
+	PRIMARY_NETWORK_MODE="STATIC"
+	shift
+	;;
     *)
       error "Unknown option: $1"
       ;;
@@ -518,8 +615,19 @@ if [ "$DESTROY_VM" = true ]; then
   read -p "Please confirm you wish to destroy $NAME (Y/N) : " destroy_confirm
   if [ "$destroy_confirm" = "Y" ] || [ "$destroy_confirm" = "y" ]; then
 	  virsh destroy "$NAME"
-	  virsh undefine "$NAME"
-	  exit 0
+	  while :
+	  do
+	  read -p "Please confirm you wish to undefine $NAME (Y/N) : " undefine_confirm
+	  if [ "$undefine_confirm" = "Y" ] || [ "$undefine_confirm" = "y" ]; then
+	  	virsh undefine "$NAME"
+		exit 0
+	  elif [ "$undefine_confirm" = "N" ] || [ "$undefine_confirm" = "n" ]; then
+		  echo "$NAME destroyed but not undefined"
+		  exit 0
+	  else
+		  echo "Please enter either y or n"
+	  fi
+  done
   elif [ "$destroy_confirm" = "N" ] || [ "$destroy_confirm" = "n" ]; then
 	  echo "Aborting destruction of $NAME"
 	  exit 0
@@ -547,6 +655,7 @@ if [ "$CLEAN_UP" = true ]; then
 			rm /opt/vm/${NAME}_config.iso
 			rm /opt/vm/${NAME}.qcow2
 			rm -f /opt/vm/${NAME}-disk2.qcow2
+			release_primary_ip "${NAME}"
 			exit 0
 		elif [ "$clean_confirm" = "N" ] || [ "$clean_confirm" = "n"]; then
 			echo "Aborting clean up of $NAME\'s files"
@@ -608,6 +717,7 @@ if [ "$FETCH" = true ]; then
 	wget -O rocky10.qcow2 https://rockylinux.mirrorservice.org/pub/rocky/10.2/images/x86_64/Rocky-10-GenericCloud-Base.latest.x86_64.qcow2
 	wget -O rocky9.qcow2 https://rockylinux.mirrorservice.org/pub/rocky/9/images/x86_64/Rocky-9-GenericCloud-Base.latest.x86_64.qcow2
 	wget -O rocky8.qcow2 https://rockylinux.mirrorservice.org/pub/rocky/8/images/x86_64/Rocky-8-GenericCloud-Base.latest.x86_64.qcow2
+	wget -O leap16.qcow2 https://download.opensuse.org/distribution/leap/16.0/appliances/Leap-16.0-Minimal-VM.x86_64-Cloud.qcow2
 	cd ..
 	echo "VM Images Successfully Downloaded"
 	exit 0
@@ -688,6 +798,10 @@ case "$OS" in
     RAWIMAGE="$UBUNTU24_RAWIMAGE"
     OS_VARIANT="ubuntunoble"
     ;;
+   leap16)
+    RAWIMAGE="$LEAP16_RAWIMAGE"
+    OS_VARIANT="linux2024"
+    ;;
 
   *)
     error "Invalid operating system: $OS. Valid values are: alma10, alma9, alma8, arch, centos10, centos9, debian13, debian12, debian11, rocky10, rocky9, rocky8, ubuntu26, ubuntu25, ubuntu24"
@@ -735,6 +849,103 @@ fi
 # ---------------------------------------------------------------------------
 # Generate the config ISO script
 # ---------------------------------------------------------------------------
+echo "allocating primary ip"
+allocate_primary_ip() {
+
+    if [ "${PRIMARY_NETWORK_MODE}" != "STATIC" ]; then
+        echo "Primary network mode: DHCP"
+        return 0
+    fi
+
+    if [ -z "${NAME}" ]; then
+        echo "ERROR: VMNAME is empty" >&2
+        exit 1
+    fi
+
+    if [ -z "${PRIMARY_MAC}" ]; then
+        echo "ERROR: PRIMARY_MAC is empty" >&2
+        exit 1
+    fi
+
+    echo "Allocating primary IP for ${NAME}"
+
+    mkdir -p "${IP_ALLOCATIONS_DIR}"
+    touch "${IP_ALLOCATIONS_FILE}"
+
+    (
+        flock -x 9
+
+        # See whether this VM already has an IP.
+        EXISTING_IP=$(
+            awk -v vm="${NAME}" '
+                $2 == vm {
+                    print $1
+                    exit
+                }
+            ' "${IP_ALLOCATIONS_FILE}"
+        )
+
+        if [ -n "${EXISTING_IP}" ]; then
+            echo "Existing primary IP: ${EXISTING_IP}"
+            echo "${EXISTING_IP}" > "/tmp/${NAME}.primary-ip"
+            exit 0
+        fi
+
+        ip_to_int() {
+            local IFS=.
+            read -r a b c d <<< "$1"
+            echo $(( (a << 24) + (b << 16) + (c << 8) + d ))
+        }
+
+        int_to_ip() {
+            local ip=$1
+            echo "$(( (ip >> 24) & 255 )).$(( (ip >> 16) & 255 )).$(( (ip >> 8) & 255 )).$(( ip & 255 ))"
+        }
+
+        START=$(ip_to_int "${PRIMARY_IP_RANGE_START}")
+        END=$(ip_to_int "${PRIMARY_IP_RANGE_END}")
+
+        for (( IP_INT=START; IP_INT<=END; IP_INT++ )); do
+
+            CANDIDATE_IP=$(int_to_ip "${IP_INT}")
+
+            if ! grep -q "^${CANDIDATE_IP} " "${IP_ALLOCATIONS_FILE}"; then
+    echo "${CANDIDATE_IP} ${NAME} ${PRIMARY_MAC}" \
+        >> "${IP_ALLOCATIONS_FILE}"
+
+    echo "${CANDIDATE_IP}" > "/tmp/${NAME}.primary-ip"
+
+    echo "Allocated primary IP ${CANDIDATE_IP}"
+
+    exit 0
+fi       done
+
+        echo "ERROR: No free IPs in ${PRIMARY_IP_RANGE_START}-${PRIMARY_IP_RANGE_END}" >&2
+        exit 1
+
+    ) 9>"${IP_ALLOCATIONS_LOCK}"
+
+    # Read the result from the locked subshell.
+    if [ ! -f "/tmp/${NAME}.primary-ip" ]; then
+        echo "ERROR: IP allocation failed" >&2
+        exit 1
+    fi
+
+    PRIMARY_IP=$(cat "/tmp/${NAME}.primary-ip")
+    rm -f "/tmp/${NAME}.primary-ip"
+
+    echo "Primary IP selected: ${PRIMARY_IP}"
+}
+
+allocate_primary_ip
+
+
+export NAME EXTERNALBRIDGE CONFIGISO RAWIMAGE MEM CPUS VMPATH DISK2 DISK2SIZE \
+       SIZE OS_VARIANT FILE_SHARING SECONDARY_IP PRIMARY_MAC SECONDARY_MAC \
+       PRIMARY_NETWORK_MODE GRAPHICAL \
+       PRIMARY_IP_RANGE_START PRIMARY_IP_RANGE_END PRIMARY_NETMASK \
+       PRIMARY_GATEWAY PRIMARY_DNS \
+ 
 CONFIG_SCRIPT="/tmp/${NAME}-generate-config-iso.sh"
 
 echo "Generating config ISO script: ${CONFIG_SCRIPT}"
@@ -756,6 +967,18 @@ META=/tmp/imageiso/meta-data
 USER=/tmp/imageiso/user-data
 ISO=/tmp/imageiso/config.iso
 NET=/tmp/imageiso/network-config
+
+PRIMARY_NETWORK_MODE="${PRIMARY_NETWORK_MODE:-DHCP}"
+
+PRIMARY_IP_RANGE_START="${PRIMARY_IP_RANGE_START:-192.168.10.100}"
+PRIMARY_IP_RANGE_END="${PRIMARY_IP_RANGE_END:-192.168.10.199}"
+PRIMARY_NETMASK="${PRIMARY_NETMASK:-24}"
+PRIMARY_GATEWAY="${PRIMARY_GATEWAY:-192.168.10.1}"
+PRIMARY_DNS="${PRIMARY_DNS:-192.168.10.1}"
+
+IP_ALLOCATIONS_DIR="/var/lib/virsh-generator"
+IP_ALLOCATIONS_FILE="${IP_ALLOCATIONS_DIR}/primary-ip-allocations"
+IP_ALLOCATIONS_LOCK="/var/lock/virsh-generator-primary-ip.lock"
 
 cat <<'METAEOF' > \$META
 instance-id: iid-${NAME}
@@ -832,13 +1055,37 @@ fi
 
 cat <<'NETEOF' > "\$NET"
 version: 2
+renderer: NetworkManager
 ethernets:
   primary:
     match:
       macaddress: "${PRIMARY_MAC}"
+NETEOF
+
+if [ "${PRIMARY_NETWORK_MODE}" = "STATIC" ]; then
+
+cat <<'NETEOF' >> "\$NET"
+    dhcp4: false
+    dhcp6: false
+    addresses:
+      - ${PRIMARY_IP}/${PRIMARY_NETMASK}
+    routes:
+      - to: 0.0.0.0/0
+        via: ${PRIMARY_GATEWAY}
+    nameservers:
+      addresses:
+        - ${PRIMARY_DNS}
+NETEOF
+
+else
+
+cat <<'NETEOF' >> "\$NET"
     dhcp4: true
     dhcp6: false
 NETEOF
+
+fi
+
 
 if [ -n "${SECONDARY_IP}" ]; then
 cat <<'NETEOF' >> "\$NET"
@@ -864,7 +1111,6 @@ runcmd:
     echo "Installing graphical desktop environment"
 
     . /etc/os-release
-
     echo "Detected OS: \${ID}"
     echo "OS version: \${VERSION_ID}"
 
@@ -872,67 +1118,51 @@ runcmd:
 
     alma|almalinux|rocky|centos)
       echo "RHEL-family OS detected"
-
       dnf -y group install "Server with GUI"
       dnf -y install gdm
-
       systemctl unmask gdm.service
       systemctl enable gdm.service
       systemctl set-default graphical.target
-      systemctl enable gdm
-      systemctl start gdm
+      systemctl enable --now gdm.service
       ;;
 
     arch)
       echo "Arch Linux detected"
-
-      pacman -Syu --noconfirm \
-        gnome \
-        gdm \
-        xorg-server
-
+      pacman -Syu --noconfirm gnome gdm xorg-server
       systemctl unmask gdm.service
       systemctl enable gdm.service
       systemctl set-default graphical.target
-      systemctl enable gdm
-      systemctl start gdm
+      systemctl enable --now gdm.service
       ;;
 
     debian)
       echo "Debian detected"
-
       export DEBIAN_FRONTEND=noninteractive
-
       apt-get update
-      apt-get install -y \
-        task-gnome-desktop \
-	gdm3
-
+      apt-get install -y task-gnome-desktop gdm3
       systemctl unmask gdm3.service
-      systemctl enable gdm3.service
       systemctl set-default graphical.target
-      systemctl start gdm3.service
-      systemctl enable gdm3
-      systemctl start gdm3
+      systemctl enable --now gdm3.service
       ;;
 
     ubuntu)
       echo "Ubuntu detected"
-
       export DEBIAN_FRONTEND=noninteractive
-
       apt-get update
-      apt-get install -y \
-        gnome-shell \
-	gnome-session \
-	gnome-terminal \
-	gdm3
-
+      apt-get install -y gnome-shell gnome-session gnome-terminal gdm3
       systemctl unmask gdm3.service
-      systemctl enable gdm3.service
       systemctl set-default graphical.target
-      systemctl enable gdm3
-      systemctl start gdm3
+      systemctl enable --now gdm3.service
+      ;;
+
+    opensuse-leap)
+      echo "openSUSE Leap detected"
+      zypper --non-interactive refresh
+      zypper --non-interactive install -t pattern gnome
+      zypper --non-interactive install gdm gnome-terminal firefox nautilus
+      systemctl unmask gdm.service
+      systemctl set-default graphical.target
+      systemctl enable --now gdm.service
       ;;
 
     *)
@@ -949,7 +1179,9 @@ fi
 
 echo "net config"
 cat "\$NET"
-
+echo "================ CLOUD-INIT NETWORK CONFIG ================"
+cat "\$NET"
+echo "============================================================"
 mkisofs -o "\$ISO" -V cidata -J "\$META" "\$USER" "\$NET"
 
 echo "Created \$ISO"
@@ -962,8 +1194,8 @@ chmod +x "$CONFIG_SCRIPT"
 # ---------------------------------------------------------------------------
 # Generate VM creation script
 # ---------------------------------------------------------------------------
-
-bash <<EOF
+echo "Starting install"
+bash <<'EOF'
 #!/bin/bash
 
 set -e
@@ -973,63 +1205,53 @@ set -e
 #==============================================
 
 VMNAME="${NAME}"
-EXTERNALBRIDGE="${EXTERNALBRIDGE}"
-CONFIGISO="${CONFIGISO}"
-RAWIMAGE="${RAWIMAGE}"
-MEM="${MEM}"
-CPUS="${CPUS}"
 
-VMPATH="${VMPATH}"
-DISK2="${DISK2}"
-DISK2SIZE="${DISK2SIZE}"
-VM_DISK="\${VMPATH}/\${VMNAME}.qcow2"
-VM_CONFIG_ISO="\${VMPATH}/\${VMNAME}_config.iso"
-DISK2_PATH="\${VMPATH}/\${VMNAME}-disk2.qcow2"
+VM_DISK="${VMPATH}/${VMNAME}.qcow2"
+VM_CONFIG_ISO="${VMPATH}/${VMNAME}_config.iso"
+DISK2_PATH="${VMPATH}/${VMNAME}-disk2.qcow2"
 
 SECONDARY_NETWORK="secondary"
-SECONDARY_XML="/tmp/\${SECONDARY_NETWORK}.xml"
-SECONDARY_IP="${SECONDARY_IP:-}"
+SECONDARY_XML="/tmp/${SECONDARY_NETWORK}.xml"
 
 if ! [ -x /usr/bin/virt-install ]; then
   echo "You need to install libvirt virt-install" >&2
   exit 1
 fi
 
-if [ ! -d "\${VMPATH}" ]; then
-  mkdir -p "\${VMPATH}"
+if [ ! -d "${VMPATH}" ]; then
+  mkdir -p "${VMPATH}"
 fi
 
-if [ -f "\${VM_DISK}" ]; then
-  echo "A Disk/VM by the name of \${VMNAME} already seems to exist" >&2
+if [ -f "${VM_DISK}" ]; then
+  echo "A Disk/VM by the name of ${VMNAME} already seems to exist" >&2
   exit 1
 fi
 
-if [ -f "\${VM_CONFIG_ISO}" ]; then
+if [ -f "${VM_CONFIG_ISO}" ]; then
   echo "A config by that name already exists" >&2
   exit 1
 fi
 
-
 #============================================
-# Disk Creation 
+# Disk Creation
 #============================================
 
-cp -v "\${RAWIMAGE}" "\${VM_DISK}"
-cp -v "\${CONFIGISO}" "\${VM_CONFIG_ISO}"
+cp -v "${RAWIMAGE}" "${VM_DISK}"
+cp -v "${CONFIGISO}" "${VM_CONFIG_ISO}"
 
 echo "Creating Primary Disk.."
-qemu-img resize "\${VM_DISK}" "${SIZE}"
+qemu-img resize "${VM_DISK}" "${SIZE}"
 
 DISK_ARGS=()
 
-if [ "\${DISK2:-}" = "Yes" ]; then
-	echo "Creating Second Disk.."
-	D2_SIZE="\${DISK2SIZE:-30G}"
-	qemu-img create -f qcow2 "\${DISK2_PATH}" "\${D2_SIZE}"
-	DISK_ARGS=(
-		--disk
-		"\${DISK2_PATH},device=disk,bus=virtio,target=vdb"
-	)
+if [ "${DISK2:-}" = "Yes" ]; then
+        echo "Creating Second Disk.."
+        D2_SIZE="${DISK2SIZE:-30G}"
+        qemu-img create -f qcow2 "${DISK2_PATH}" "${D2_SIZE}"
+        DISK_ARGS=(
+                --disk
+                "${DISK2_PATH},device=disk,bus=virtio,target=vdb"
+        )
 fi
 
 #==========================================
@@ -1037,40 +1259,38 @@ fi
 #==========================================
 
 FILESHARE_ARGS=()
+MEMORY_ARGS=()
 
 if [ "${FILE_SHARING}" = "Yes" ]; then
-	echo "Setting up filesharing"
-	SHARED_DIR="/home/rnd/virsh-generator/shared-files/${NAME}"
-	mkdir -p "\${SHARED_DIR}"
-	FILESHARE_ARGS=(--filesystem \${SHARED_DIR},target.dir=hostshare,driver.type=virtiofs
-	)
-fi
-
-if [ "${FILE_SHARING}" = "Yes" ]; then
-	MEMORY_ARGS=(
-		--memorybacking source.type=memfd,access.mode=shared
-	)
+        echo "Setting up filesharing"
+        SHARED_DIR="/home/rnd/virsh-generator/shared-files/${NAME}"
+        mkdir -p "${SHARED_DIR}"
+        FILESHARE_ARGS=(
+                --filesystem
+                "${SHARED_DIR},target.dir=hostshare,driver.type=virtiofs"
+        )
+        MEMORY_ARGS=(
+                --memorybacking source.type=memfd,access.mode=shared
+        )
 fi
 
 #========================================
 # display
 #========================================
 
-DISPLAY_ARGS=()
-
+DISPLAY_ARGS=(
+    --graphics "vnc,listen=0.0.0.0,port=-1,password=secret12"
+)
 if [ "${GRAPHICAL}" = "Yes" ]; then
-	echo "Graphical mode enabled"
-	
-	DISPLAY_ARGS=(
-	    --graphics "vnc,listen=0.0.0.0,port=1,passwd='secret12'"
-	    --video vga
-	)
+        echo "Graphical mode enabled"
+        DISPLAY_ARGS+=(
+            --video vga
+        )
 else
-	echo "Console mode enabled"
-	
-	DISPLAY_ARGS=(
-	    --console pty,target_type=serial
-	)
+        echo "Console mode enabled"
+        DISPLAY_ARGS+=(
+            --console pty,target_type=serial
+        )
 fi
 
 #===========================================
@@ -1082,31 +1302,35 @@ NETWORK_ARGS=(
 
 if [ -n "${SECONDARY_IP}" ]; then
     echo "Adding secondary network on bridge vm-secondary"
-
     NETWORK_ARGS+=(
         --network "bridge=vm-secondary,mac=${SECONDARY_MAC}"
     )
 fi
+
 echo "NETWORK_ARGS:"
-printf ' %q\n' "\${NETWORK_ARGS[@]}"
-virt-install \\
-  --connect qemu:///session \\
-  --name "\${VMNAME}" \\
-  --import \\
-  --ram "\${MEM:-2048}" \\
-  "\${MEMORY_ARGS[@]}" \\
-  --disk "\${VM_DISK},device=disk,bus=virtio,target=vda,boot.order=1" \\
-  --disk "\${VM_CONFIG_ISO},device=cdrom,bus=scsi" \\
-  "\${DISK_ARGS[@]}" \\
-  --vcpus "\${CPUS:-2}" \\
-  --os-variant "${OS_VARIANT}" \\
-  "\${NETWORK_ARGS[@]}" \\
-  "\${FILESHARE_ARGS[@]}" \\
-  --video vga \\
-  --console pty,target_type=serial \\
-  --metadata title="${NAME} created by generate-vm",description="created by generate-vm" \\
---graphics vnc,listen=0.0.0.0,port=-1,passwd='secret45' \\
---noautoconsole 
+printf ' %q\n' "${NETWORK_ARGS[@]}"
+
+virt-install \
+  --connect qemu:///session \
+  --name "${VMNAME}" \
+  --import \
+  --ram "${MEM:-2048}" \
+  "${MEMORY_ARGS[@]}" \
+  --disk "${VM_DISK},device=disk,bus=virtio,target=vda,boot.order=1" \
+  --disk "${VM_CONFIG_ISO},device=cdrom,bus=scsi" \
+  "${DISK_ARGS[@]}" \
+  --vcpus "${CPUS:-2}" \
+  --os-variant "${OS_VARIANT}" \
+  "${NETWORK_ARGS[@]}" \
+  "${FILESHARE_ARGS[@]}" \
+  "${DISPLAY_ARGS[@]}" \
+  --metadata title="${NAME} created by generate-vm",description="created by generate-vm" \
+  --noautoconsole
+
+echo "Setting VNC password..."
+
+virsh --connect qemu:///session qemu-monitor-command "${VMNAME}" \
+    --hmp "change vnc password secret12"
 EOF
 
 echo
@@ -1115,13 +1339,20 @@ echo "  ${CONFIGISO}"
 
 echo
 echo "=========================================="
-echo "VM created: ${NAME}"
+echo "VMNAME:              ${NAME}"
+echo "NETWORK MODE:        ${PRIMARY_NETWORK_MODE}"
+echo "PRIMARY MAC:         ${PRIMARY_MAC}"
+echo "PRIMARY IP:          ${PRIMARY_IP:-DHCP}"
 echo "=========================================="
+if [[ $CONSOLE = "Yes" ]]; then
+	virsh console ${NAME}
+fi
 
 VNC_DISPLAY=$(virsh vncdisplay "${NAME}" 2>/dev/null || true)
 
 if [ -n "${VNC_DISPLAY}" ]; then
-    VNC_PORT=$((5900 + ${VNC_DISPLAY#:}))
+	DISPLAY_NUM=${VNC_DISPLAY##*:}
+    VNC_PORT=$((5900 + $DISPLAY_NUM))
 
     echo "VNC display : ${VNC_DISPLAY}"
     echo "VNC port    : ${VNC_PORT}"
@@ -1132,4 +1363,4 @@ if [ "${GRAPHICAL}" = "Yes" ]; then
 	echo "Please wait 4-5 mins before attempting to connect to allow the gui packages to be installed and boot"
 fi
 echo
-echo "to connect to ${NAME} on your machine enter: open \"vnc://secret45@$(hostname -s):${VNC_PORT}\""
+echo "to connect to ${NAME} on your machine enter: open \"vnc://secret12@$(hostname -s):${VNC_PORT}\""
