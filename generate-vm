@@ -29,8 +29,9 @@ CENTOS9_RAWIMAGE="/home/rnd/virsh-generator/images/centos9.qcow2"
 UBUNTU26_RAWIMAGE="/home/rnd/virsh-generator/images/ubuntu26.qcow2"
 UBUNTU25_RAWIMAGE="/home/rnd/virsh-generator/images/ubuntu25.qcow2"
 UBUNTU24_RAWIMAGE="/home/rnd/virsh-generator/images/ubuntu24.qcow2"
-LEAP16_RAWIMAGE="/home/rnd/virsh-generator/images/leap16.qcow2"
-
+OPENSUSE_RAWIMAGE="/home/rnd/virsh-generator/images/leap16.qcow2"
+RHEL10_RAWIMAGE="/home/rnd/virsh-generator/images/rhel10.qcow2"
+RHEL9_RAWIMAGE="/home/rnd/virsh-generator/images/rhel9.qcow2"
 
 ROOT_PASSWORD="0p3nflight"
 
@@ -42,28 +43,31 @@ DISK2=""
 DISK2_SIZE=""
 MEM=""
 CPUS=""
-SECONDARY_IP=""
+EXTERNAL_IP=""
 FILE_SHARING=""
-PRIMARY_MAC="$(printf '52:54:00:%02x:%02x:%02x'\
+EXTERNAL_MAC="$(printf '52:54:00:%02x:%02x:%02x'\
       	$((RANDOM%256))\
       	$((RANDOM%256))\
 	$((RANDOM%256)))"
 
-SECONDARY_MAC="$(printf '52:54:00:%02x:%02x:%02x'\
+INTERNAL_MAC="$(printf '52:54:00:%02x:%02x:%02x'\
        	$((RANDOM%256))\
        	$((RANDOM%256))\
 	$((RANDOM%256)))"
 GRAPHICAL=""
 CONSOLE=""
-PRIMARY_NETWORK_MODE=""
-PRIMARY_IP_RANGE_START="10.151.44.10"
-PRIMARY_IP_RANGE_END="10.151.44.250"
-PRIMARY_NETMASK="16"
-PRIMARY_GATEWAY="10.151.0.1"
-PRIMARY_DNS="10.151.0.1"
+EXTERNAL_NETWORK_MODE=""
+EXTERNAL_IP_RANGE_START="10.151.44.10"
+EXTERNAL_IP_RANGE_END="10.151.44.250"
+EXTERNAL_NETMASK="16"
+EXTERNAL_GATEWAY="10.151.0.1"
+EXTERNAL_DNS="10.151.0.1"
 IP_ALLOCATIONS_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/virsh-generator"
 IP_ALLOCATIONS_FILE="${IP_ALLOCATIONS_DIR}/primary-ip-allocations"
 IP_ALLOCATIONS_LOCK="${IP_ALLOCATIONS_DIR}/primary-ip.lock"
+INTERNAL_NET_ONLY=""
+VNCCONSOLE=""
+CUSTOMCMD=""
 # ---------------------------------------------------------------------------
 # Functions
 # ---------------------------------------------------------------------------
@@ -87,11 +91,11 @@ usage() {
   echo "      if disk2 is not added as an option the vm will boot with 1 disk"
   echo "      --disk2size (Optional)               Allows the specification of the size of disk2"
   echo "      if disk2size is not added as an option but disk2 is the resulting disk will have a size of 30G"
-  echo "      --secondary-ip (Optional)		    Joins the vm to a libvirt only network with specified ip"
+  echo "      --internal-ip (Optional)		    Joins the vm to a libvirt only network with specified ip"
   echo "      Allows vms which have a secondary-ip set to communicate with each other"
   echo "      --graphical-login (Optional)	    Setting for the generated vm to have a GUI"
   echo "      --console (Optional)                  Boots into virsh console making it easy to get the ssh address of the vm"
-  echo "      --static (Optional) 		    Sets the primary network interface to static mode picking from ips 10.151.44.[10-250] instead of using DHCP"
+  echo "      --external-nodhcp (Optional) 		    Sets the primary network interface to static mode picking from ips 10.151.44.[10-250] instead of using DHCP"
   echo "Commands:"
   echo "      --wizard                     Provides a guided virtual machine creation"
   echo "      --stop                       Stops the specified vm"
@@ -117,7 +121,7 @@ usage() {
   echo "ubuntu26"
   echo "ubuntu25"
   echo "ubuntu24"
-  echo "leap16"
+  echo "opensuse"
   echo
   echo "Example:"
   echo "  $0 --name myvm --user dev --size 64G --os alma9 --ssh \"ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqq96Vvclff96Iq1vXOnFp6yS2/7uBwZ8W7aF7Xf9z\" "
@@ -228,7 +232,8 @@ wizard() {
     echo "Debian: debian13, debian12, debian11"
     echo "Rocky: rocky10, rocky9, rocky8"
     echo "Ubuntu: ubuntu26, ubuntu25, ubuntu24"
-    echo "Leap: leap16"
+    echo "OpenSuse: opensuse"
+    echo "Rhel: rhel10, rhel9"
     echo
 
     while :
@@ -242,7 +247,7 @@ do
         debian13|debian12|debian11|\
         rocky10|rocky9|rocky8|\
         ubuntu26|ubuntu25|ubuntu24|\
-	leap16)
+	opensuse|rhel9|rhel10)
             OS="$oschoice"
             break
             ;;
@@ -268,32 +273,44 @@ do
 done
 
 clear
-
 while :
 do
-	read -r -p "Would you like to use dhcp on the primary interface? " dhcp
+	read -r -p "Would you like to have a connection to the external network? " extnet
+	if [[ $extnet = "Yes" || $extnet = "yes" ]]; then
+while :
+do
+	clear
+	read -r -p "Would you like to use dhcp on the external network? " dhcp
 	if [[ $dhcp = "Yes" || $dhcp = "yes" ]]; then
 		break
 	elif [[ $dhcp = "No" || $dhcp = "no" ]]; then
-		CONSOLE="STATIC"
+		EXTERNAL_NETWORK_MODE="STATIC"
 		break
 	else
 		echo -e "${red}Error: invalid response: ${nc} $dhcp" >&2
+	fi
+done
+break
+	elif [[ $extnet = "No" || $extnet = "no" ]]; then
+		INTERNAL_NET_ONLY="Yes"
+		break
+	else
+		echo -e "${red}Error: invalid response: ${nc} $extnet" >&2
 	fi
 done
 
 
 clear
 
-    read -r -p "Would you like to include a secondary IP address? " ipaddrq
+    read -r -p "Would you like to include the vm on the internal network? " ipaddrq
 
     if [[ "$ipaddrq" =~ ^([yY]|[yY][eE][sS])$ ]]; then
         clear
 	while :
 	do
-        	read -r -p "What would you like the secondary IP address to be (IPv4 format e.g. 10.0.0.1)? " net2ip
+        	read -r -p "What would you like the internal IP address to be (IPv4 format e.g. 10.0.0.1)? " net2ip
 		if is_valid_ipv4 "$net2ip"; then
-        		SECONDARY_IP="$net2ip"
+        		INTERNAL_IP="$net2ip"
 			break
 		else
 			echo -e "${red}Error: invalid ip:${nc} $net2ip" >&2
@@ -303,27 +320,45 @@ clear
 
     clear
 
+    read -r -p "Would you like to attach any custom commands to the installation (Y\N) ? " customYorN
+    if [[ "$customYorN" =~ ^([yY]|[yY][eE][sS])$ ]]; then
+	clear
+    	read -r -p "What custom commands would you like to attach? " customcommand
+	CUSTOMCMD="$customcommand"
+    fi
+
+    clear
+
     while :
     do
-	    read -r -p "Would you ike to connect via vnc or ssh? " connectchoice
-	    if [[ $connectchoice = "ssh"  ||  $connectchoice = "SSH" ]]; then
-		    CONSOLE="Yes"
+	    read -r -p "Would you like to enable VNC libvirt console? " vncConsole
+	    if [[ $vncConsole = "yes"  ||  $vncConsole  = "Yes" ]]; then
+		    VNCCONSOLE="Yes"
 		    break
-            elif [[ $connectchoice = "VNC"  || $connectchoice = "vnc" ]]; then
+            elif [[ $vncConsole = "No"  || $vncConsole = "no" ]]; then
 		    break
             else
 		    echo -e "${red}Error: invalid input: ${nc} $connectchoice"
 	    fi
     done
 
+
+
+
+
     clear
-    if [[ $CONSOLE != "Yes" ]]; then
+    
     	read -r -p "Would you like your vm to have a GUI? " gui
 
     	if [[ "$gui" =~ ^([yY]|[yY][eE][sS])$ ]]; then
 	    	GRAPHICAL="Yes"
     	fi
     	clear
+
+    read -r -p "Would you like to connect to the serial console?" serconsole
+
+    if [[ $serconsole = "Yes" || $serconsole = "yes" ]]; then
+	    CONSOLE="Yes"
     fi
 
     cat << 'EOF'
@@ -539,22 +574,31 @@ while [[ $# -gt 0 ]]; do
                echo "Error: invalid amount of CPU cores: $MEM" >&2
        fi
        ;;
-   --secondary-ip)
-       SECONDARY_IP="$2"
-       if ! is_valid_ipv4 "$SECONDARY_IP"; then
-        echo "Error: invalid IPv4 address: $SECONDARY_IP" >&2
+   --internal-ip)
+       INTERNAL_IP="$2"
+       if ! is_valid_ipv4 "$INTERNAL_IP"; then
+        echo "Error: invalid IPv4 address: $INTERNAL_IP" >&2
         exit 1
     fi
        shift 2
        ;;
-   --secondary-ip=*)
-       SECONDARY_IP="${1#*=}"
-       if ! is_valid_ipv4 "$SECONDARY_IP"; then
-        echo "Error: invalid IPv4 address: $SECONDARY_IP" >&2
+   --internal-ip=*)
+       INTERNAL_IP="${1#*=}"
+       if ! is_valid_ipv4 "$INTERNAL_IP"; then
+        echo "Error: invalid IPv4 address: $INTERNAL_IP" >&2
         exit 1
     fi
        shift
        ;;
+
+--customcmd)
+	CUSTOMCMD="$2"
+	shift 2
+	;;
+--customcmd=*)
+	CUSTOMCMD="${1#*=}"
+	shift
+	;;
 
     -h|--help)
       usage
@@ -575,8 +619,12 @@ while [[ $# -gt 0 ]]; do
 	SSH_PUBLIC_KEY="${1#*=}"
 	shift
 	;;
-   --static)
-	PRIMARY_NETWORK_MODE="STATIC"
+   --external-nodhcp)
+	EXTERNAL_NETWORK_MODE="STATIC"
+	shift
+	;;
+   --internal-net-only)
+	INTERNAL_NET_ONLY="Yes"
 	shift
 	;;
     *)
@@ -791,13 +839,21 @@ case "$OS" in
     RAWIMAGE="$UBUNTU24_RAWIMAGE"
     OS_VARIANT="ubuntunoble"
     ;;
-   leap16)
-    RAWIMAGE="$LEAP16_RAWIMAGE"
-    OS_VARIANT="linux2024"
+   opensuse)
+    RAWIMAGE="$OPENSUSE_RAWIMAGE"
+    OS_VARIANT="opensuse16.0"
+    ;;
+   rhel10)
+    RAWIMAGE="$RHEL10_RAWIMAGE"
+    OS_VARIANT="rhel10.0"
+    ;;
+   rhel9)
+    RAWIMAGE="$RHEL9_RAWIMAGE"
+    OS_VARIANT="rhel9.0"
     ;;
 
   *)
-    error "Invalid operating system: $OS. Valid values are: alma10, alma9, alma8, arch, centos10, centos9, debian13, debian12, debian11, rocky10, rocky9, rocky8, ubuntu26, ubuntu25, ubuntu24"
+    error "Invalid operating system: $OS. Valid values are: alma10, alma9, alma8, arch, centos10, centos9, debian13, debian12, debian11, rocky10, rocky9, rocky8, ubuntu26, ubuntu25, ubuntu24, opensuse, rhel9, rhel10"
     ;;
 esac
 
@@ -842,11 +898,11 @@ fi
 # ---------------------------------------------------------------------------
 # Generate the config ISO script
 # ---------------------------------------------------------------------------
-echo "allocating primary ip"
+echo "allocating external network ip"
 allocate_primary_ip() {
 
-    if [ "${PRIMARY_NETWORK_MODE}" != "STATIC" ]; then
-        echo "Primary network mode: DHCP"
+    if [ "${EXTERNAL_NETWORK_MODE}" != "STATIC" ]; then
+        echo "External network mode: DHCP"
         return 0
     fi
 
@@ -855,12 +911,12 @@ allocate_primary_ip() {
         exit 1
     fi
 
-    if [ -z "${PRIMARY_MAC}" ]; then
-        echo "ERROR: PRIMARY_MAC is empty" >&2
+    if [ -z "${EXTERNAL_MAC}" ]; then
+        echo "ERROR: EXTERNAL_MAC is empty" >&2
         exit 1
     fi
 
-    echo "Allocating primary IP for ${NAME}"
+    echo "Allocating External IP for ${NAME}"
 
     mkdir -p "${IP_ALLOCATIONS_DIR}"
     touch "${IP_ALLOCATIONS_FILE}"
@@ -868,7 +924,6 @@ allocate_primary_ip() {
     (
         flock -x 9
 
-        # See whether this VM already has an IP.
         EXISTING_IP=$(
             awk -v vm="${NAME}" '
                 $2 == vm {
@@ -879,7 +934,7 @@ allocate_primary_ip() {
         )
 
         if [ -n "${EXISTING_IP}" ]; then
-            echo "Existing primary IP: ${EXISTING_IP}"
+            echo "Existing external IP: ${EXISTING_IP}"
             echo "${EXISTING_IP}" > "/tmp/${NAME}.primary-ip"
             exit 0
         fi
@@ -895,25 +950,25 @@ allocate_primary_ip() {
             echo "$(( (ip >> 24) & 255 )).$(( (ip >> 16) & 255 )).$(( (ip >> 8) & 255 )).$(( ip & 255 ))"
         }
 
-        START=$(ip_to_int "${PRIMARY_IP_RANGE_START}")
-        END=$(ip_to_int "${PRIMARY_IP_RANGE_END}")
+        START=$(ip_to_int "${EXTERNAL_IP_RANGE_START}")
+        END=$(ip_to_int "${EXTERNAL_IP_RANGE_END}")
 
         for (( IP_INT=START; IP_INT<=END; IP_INT++ )); do
 
             CANDIDATE_IP=$(int_to_ip "${IP_INT}")
 
             if ! grep -q "^${CANDIDATE_IP} " "${IP_ALLOCATIONS_FILE}"; then
-    echo "${CANDIDATE_IP} ${NAME} ${PRIMARY_MAC}" \
+    echo "${CANDIDATE_IP} ${NAME} ${EXTERNAL_MAC}" \
         >> "${IP_ALLOCATIONS_FILE}"
 
     echo "${CANDIDATE_IP}" > "/tmp/${NAME}.primary-ip"
 
-    echo "Allocated primary IP ${CANDIDATE_IP}"
+    echo "Allocated external IP ${CANDIDATE_IP}"
 
     exit 0
 fi       done
 
-        echo "ERROR: No free IPs in ${PRIMARY_IP_RANGE_START}-${PRIMARY_IP_RANGE_END}" >&2
+        echo "ERROR: No free IPs in ${EXTERNAL_IP_RANGE_START}-${EXTERNAL_IP_RANGE_END}" >&2
         exit 1
 
     ) 9>"${IP_ALLOCATIONS_LOCK}"
@@ -924,20 +979,20 @@ fi       done
         exit 1
     fi
 
-    PRIMARY_IP=$(cat "/tmp/${NAME}.primary-ip")
+    EXTERNAL_IP=$(cat "/tmp/${NAME}.primary-ip")
     rm -f "/tmp/${NAME}.primary-ip"
 
-    echo "Primary IP selected: ${PRIMARY_IP}"
+    echo "External IP selected: ${EXTERNAL_IP}"
 }
 
 allocate_primary_ip
 
 
 export NAME EXTERNALBRIDGE CONFIGISO RAWIMAGE MEM CPUS VMPATH DISK2 DISK2SIZE \
-       SIZE OS_VARIANT FILE_SHARING SECONDARY_IP PRIMARY_MAC SECONDARY_MAC \
-       PRIMARY_NETWORK_MODE GRAPHICAL \
-       PRIMARY_IP_RANGE_START PRIMARY_IP_RANGE_END PRIMARY_NETMASK \
-       PRIMARY_GATEWAY PRIMARY_DNS \
+       SIZE OS_VARIANT FILE_SHARING INTERNAL_IP EXTERNAL_MAC INTERNAL_MAC \
+       EXTERNAL_NETWORK_MODE GRAPHICAL \
+       EXTERNAL_IP_RANGE_START EXTERNAL_IP_RANGE_END EXTERNAL_NETMASK \
+       EXTERNAL_GATEWAY EXTERNAL_DNS  INTERNAL_NET_ONLY\
  
 CONFIG_SCRIPT="/tmp/${NAME}-generate-config-iso.sh"
 
@@ -961,13 +1016,13 @@ USER=/tmp/imageiso/user-data
 ISO=/tmp/imageiso/config.iso
 NET=/tmp/imageiso/network-config
 
-PRIMARY_NETWORK_MODE="${PRIMARY_NETWORK_MODE:-DHCP}"
+EXTERNAL_NETWORK_MODE="${EXTERNAL_NETWORK_MODE:-DHCP}"
 
-PRIMARY_IP_RANGE_START="${PRIMARY_IP_RANGE_START:-192.168.10.100}"
-PRIMARY_IP_RANGE_END="${PRIMARY_IP_RANGE_END:-192.168.10.199}"
-PRIMARY_NETMASK="${PRIMARY_NETMASK:-24}"
-PRIMARY_GATEWAY="${PRIMARY_GATEWAY:-192.168.10.1}"
-PRIMARY_DNS="${PRIMARY_DNS:-192.168.10.1}"
+EXTERNAL_IP_RANGE_START="${EXTERNAL_IP_RANGE_START}"
+EXTERNAL_IP_RANGE_END="${EXTERNAL_IP_RANGE_END}"
+EXTERNAL_NETMASK="${EXTERNAL_NETMASK}"
+EXTERNAL_GATEWAY="${EXTERNAL_GATEWAY}"
+EXTERNAL_DNS="${EXTERNAL_DNS}"
 
 IP_ALLOCATIONS_DIR="/var/lib/virsh-generator"
 IP_ALLOCATIONS_FILE="${IP_ALLOCATIONS_DIR}/primary-ip-allocations"
@@ -985,8 +1040,8 @@ METAEOF
 
 cat <<'USEREOF' > \$USER
 #cloud-config
-disable_root: 0
-ssh_pwauth: 1
+disable_root: false
+ssh_pwauth: true
 
 chpasswd:
   list: |
@@ -1001,11 +1056,22 @@ system_info:
     groups: [wheel, adm, systemd-journal]
     sudo: ["ALL=(ALL) NOPASSWD:ALL"]
     shell: /bin/bash
+
 USEREOF
+
+if [ -n "${INTERNAL_NET_ONLY}" ]; then
+cat <<'NTPEOF' >> "\$USER"
+ntp:
+  enabled: true
+  ntp_client: auto
+  servers:
+    - 10.0.0.10
+NTPEOF
+fi
 
 if [ "${FILE_SHARING}" = "Yes" ]; then
 
-cat <<'SHAREEOF' >> "$USER"
+cat <<'SHAREEOF' >> "\$USER"
 
 bootcmd:
   - mkdir -p /mnt/shared
@@ -1045,52 +1111,67 @@ fi
 #==============================
 # Network Configuration
 #=============================
-
 cat <<'NETEOF' > "\$NET"
 version: 2
-renderer: NetworkManager
 ethernets:
-  primary:
-    match:
-      macaddress: "${PRIMARY_MAC}"
 NETEOF
 
-if [ "${PRIMARY_NETWORK_MODE}" = "STATIC" ]; then
+if [ -z "${INTERNAL_NET_ONLY}" ]; then
+    cat <<'NETEOF' >> "\$NET"
+  primary:
+    match:
+      macaddress: "${EXTERNAL_MAC}"
+NETEOF
 
-cat <<'NETEOF' >> "\$NET"
+    if [ "${EXTERNAL_NETWORK_MODE}" = "STATIC" ]; then
+        cat <<'NETEOF' >> "\$NET"
     dhcp4: false
     dhcp6: false
     addresses:
-      - ${PRIMARY_IP}/${PRIMARY_NETMASK}
+      - ${EXTERNAL_IP}/${EXTERNAL_NETMASK}
     routes:
       - to: 0.0.0.0/0
-        via: ${PRIMARY_GATEWAY}
+        via: ${EXTERNAL_GATEWAY}
     nameservers:
       addresses:
-        - ${PRIMARY_DNS}
+        - ${EXTERNAL_DNS}
 NETEOF
-
-else
-
-cat <<'NETEOF' >> "\$NET"
+    else
+        cat <<'NETEOF' >> "\$NET"
     dhcp4: true
     dhcp6: false
 NETEOF
-
+    fi
 fi
 
-
-if [ -n "${SECONDARY_IP}" ]; then
-cat <<'NETEOF' >> "\$NET"
+if [ -n "${INTERNAL_IP}" ]; then
+    cat <<'NETEOF' >> "\$NET"
   secondary:
     match:
-      macaddress: "${SECONDARY_MAC}"
+      macaddress: "${INTERNAL_MAC}"
     dhcp4: false
     dhcp6: false
     addresses:
-      - ${SECONDARY_IP}/24
+      - ${INTERNAL_IP}/24
 NETEOF
 fi
+#===============================
+# Custom CMD
+#===============================
+
+if [ -n "${CUSTOMCMD}" ]; then
+
+cat <<'CMDEOF' >> "\$USER"
+
+runcmd:
+  - |
+    set -e
+    ${CUSTOMCMD}
+
+CMDEOF
+
+fi
+
 
 #================================
 # Graphical desktop configuration
@@ -1109,7 +1190,7 @@ runcmd:
 
     case "\${ID}" in
 
-    alma|almalinux|rocky|centos)
+    alma|almalinux|rocky|centos|rhel)
       echo "RHEL-family OS detected"
       dnf -y group install "Server with GUI"
       dnf -y install gdm
@@ -1172,9 +1253,6 @@ fi
 
 echo "net config"
 cat "\$NET"
-echo "================ CLOUD-INIT NETWORK CONFIG ================"
-cat "\$NET"
-echo "============================================================"
 mkisofs -o "\$ISO" -V cidata -J "\$META" "\$USER" "\$NET"
 
 echo "Created \$ISO"
@@ -1272,7 +1350,7 @@ fi
 #========================================
 
 DISPLAY_ARGS=(
-    --graphics "vnc,listen=0.0.0.0,port=-1,password=secret12"
+    --graphics "vnc,listen=10.151.0.207,port=-1,password=secret12"
 )
 if [ "${GRAPHICAL}" = "Yes" ]; then
         echo "Graphical mode enabled"
@@ -1289,17 +1367,33 @@ fi
 #===========================================
 # Virt-install command
 #===========================================
-NETWORK_ARGS=(
-    --network "bridge=${EXTERNALBRIDGE},mac=${PRIMARY_MAC}"
-)
+NETWORK_ARGS=()
 
-if [ -n "${SECONDARY_IP}" ]; then
-    echo "Adding secondary network on bridge vm-secondary"
+if [ -n "${INTERNAL_NET_ONLY}" ]; then
+
+    echo "Internal network only"
+
     NETWORK_ARGS+=(
-        --network "bridge=vm-secondary,mac=${SECONDARY_MAC}"
+        --network "bridge=vm-secondary,mac=${INTERNAL_MAC}"
     )
-fi
 
+else
+
+    echo "Adding external network"
+
+    NETWORK_ARGS+=(
+        --network "bridge=${EXTERNALBRIDGE},mac=${EXTERNAL_MAC}"
+    )
+
+    if [ -n "${INTERNAL_IP}" ]; then
+        echo "Adding internal network on bridge vm-secondary"
+
+        NETWORK_ARGS+=(
+            --network "bridge=vm-secondary,mac=${INTERNAL_MAC}"
+        )
+    fi
+
+fi
 echo "NETWORK_ARGS:"
 printf ' %q\n' "${NETWORK_ARGS[@]}"
 
@@ -1333,14 +1427,14 @@ echo "  ${CONFIGISO}"
 echo
 echo "=========================================="
 echo "VMNAME:              ${NAME}"
-echo "NETWORK MODE:        ${PRIMARY_NETWORK_MODE}"
-echo "PRIMARY MAC:         ${PRIMARY_MAC}"
-echo "PRIMARY IP:          ${PRIMARY_IP:-DHCP}"
+echo "NETWORK MODE:        ${EXTERNAL_NETWORK_MODE}"
+echo "EXTERNAL MAC:         ${EXTERNAL_MAC}"
+echo "EXTERNAL IP:          ${EXTERNAL_IP:-DHCP}"
 echo "=========================================="
 if [[ $CONSOLE = "Yes" ]]; then
 	virsh console ${NAME}
 fi
-
+if [[ $VNCCONSOLE = "Yes" ]]; then
 VNC_DISPLAY=$(virsh vncdisplay "${NAME}" 2>/dev/null || true)
 
 if [ -n "${VNC_DISPLAY}" ]; then
@@ -1356,4 +1450,5 @@ if [ "${GRAPHICAL}" = "Yes" ]; then
 	echo "Please wait 4-5 mins before attempting to connect to allow the gui packages to be installed and boot"
 fi
 echo
-echo "to connect to ${NAME} on your machine enter: open \"vnc://secret12@$(hostname -s):${VNC_PORT}\""
+echo "to connect to ${NAME} on your machine enter: open \"vnc://:secret12@$(hostname -s):${VNC_PORT}\""
+fi
