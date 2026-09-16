@@ -68,6 +68,9 @@ IP_ALLOCATIONS_LOCK="${IP_ALLOCATIONS_DIR}/primary-ip.lock"
 INTERNAL_NET_ONLY=""
 VNCCONSOLE=""
 CUSTOMCMD=""
+DOCKERPACK=""
+RUBYPACK=""
+REACTPACK=""
 # ---------------------------------------------------------------------------
 # Functions
 # ---------------------------------------------------------------------------
@@ -96,6 +99,10 @@ usage() {
   echo "      --graphical-login (Optional)	    Setting for the generated vm to have a GUI"
   echo "      --console (Optional)                  Boots into virsh console making it easy to get the ssh address of the vm"
   echo "      --external-nodhcp (Optional) 		    Sets the primary network interface to static mode picking from ips 10.151.44.[10-250] instead of using DHCP"
+  echo "      --internal-net-only (Optional)                Boots the vm with only a connection to the internal network"
+  echo "      --dockerpack (Optional) 			    Boots the vm with docker installed"
+  echo "      --rubypack (Optional)                         Boots the vm with ruby and rails installed"
+  echo "      --reactpack (Optional)                        Boots the vm with nodejs installed"
   echo "Commands:"
   echo "      --wizard                     Provides a guided virtual machine creation"
   echo "      --stop                       Stops the specified vm"
@@ -342,7 +349,58 @@ clear
 	    fi
     done
 
+clear
+while :
+do
+	read -r -p "Would you like the vm to boot with any software already installed? " softwarepacks
+	if [[ $softwarepacks = "yes" || $softwarepacks = "Yes" ]]; then
+		while :
+		do
+			read -r -p "Would you like the vm to boot with ruby and rails installed? " rubypack
+			if [[ $rubypack = "yes" || $rubypack = "Yes" ]]; then
+				RUBYPACK="Yes"
+				break
+			elif [[ $rubypack = "No" || $rubypack = "no" ]]; then
+				break
+			else
+				echo -e "${red}Error: invalid input: ${nc} $rubypack"
+			fi
+		done
 
+	clear
+
+	while :
+	do
+		read -r -p "Would you like the vm to boot with docker installed? " dockerpack
+		if [[ $dockerpack = "yes" || $dockerpack = "Yes" ]]; then
+			DOCKERPACK="Yes"
+			break
+		elif [[ $dockerpack = "no" || $dockerpack = "No" ]]; then
+			break
+		else
+			echo -e "${red}Error: invalid input: ${nc} $dockerpack"
+		fi
+	done
+
+	while :
+	do
+		read -r -p "Would you like the vm to boot with node installed? " reactpack
+		if [[ $reactpack = "Yes" || $reactpack = "yes" ]]; then
+			REACTPACK="Yes"
+			break
+		elif [[ $reactpack = "No" || $reactpack = "no" ]]; then
+			break
+		else
+			echo -e "${red}Error: invalid input: ${nc} $reactpack"
+		fi
+	done
+
+	elif [[ $softwarepacks = "No" || $softwarepacks = "no" ]]; then
+		break
+	else
+		echo -e "${red}Error: invalid input: ${nc} $softwarepacks"
+	fi
+done
 
 
 
@@ -355,7 +413,7 @@ clear
     	fi
     	clear
 
-    read -r -p "Would you like to connect to the serial console?" serconsole
+    read -r -p "Would you like to connect to the serial console? " serconsole
 
     if [[ $serconsole = "Yes" || $serconsole = "yes" ]]; then
 	    CONSOLE="Yes"
@@ -625,6 +683,18 @@ while [[ $# -gt 0 ]]; do
 	;;
    --internal-net-only)
 	INTERNAL_NET_ONLY="Yes"
+	shift
+	;;
+   --dockerpack)
+	DOCKERPACK="Yes"
+	shift
+	;;
+   --rubypack)
+	RUBYPACK="Yes"
+	shift
+	;;
+   --reactpack)
+	REACTPACK="Yes"
 	shift
 	;;
     *)
@@ -1172,6 +1242,359 @@ CMDEOF
 
 fi
 
+#================================
+# Software Packs
+#===============================
+
+if [ "${DOCKERPACK}" = "Yes" ] || \
+   [ "${RUBYPACK}" = "Yes" ] || \
+   [ "${REACTPACK}" = "Yes" ]; then
+
+cat << 'SOFTPACKEOF' >> "\$USER"
+runcmd:
+  - |
+    set -e
+
+    . /etc/os-release
+
+    echo "Detected OS: "\${ID}"
+    echo "OS version: "\${VERSION_ID}"
+
+    case "\${ID}" in
+
+    alma|almalinux|rocky|centos|rhel)
+        echo "RHEL Family OS detected"
+
+        if [ "${DOCKERPACK}" = "Yes" ]; then
+            echo "Installing Docker..."
+
+            dnf remove -y \
+                docker \
+                docker-client \
+                docker-client-latest \
+                docker-common \
+                docker-latest \
+                docker-latest-logrotate \
+                docker-logrotate \
+                docker-engine \
+                podman \
+                buildah || true
+
+            dnf install -y dnf-plugins-core
+
+            dnf config-manager \
+                --add-repo \
+                https://download.docker.com/linux/rhel/docker-ce.repo
+
+            dnf install -y \
+                docker-ce \
+                docker-ce-cli \
+                containerd.io \
+                docker-buildx-plugin \
+                docker-compose-plugin
+
+            systemctl enable --now docker
+
+            docker --version
+            docker compose version
+
+            docker run hello-world
+        fi
+
+        if [ "${RUBYPACK}" = "Yes" ]; then
+            echo "Installing Ruby..."
+
+            dnf install -y \
+                ruby \
+                ruby-devel \
+                rubygem-bundler \
+                gcc \
+                gcc-c++ \
+                make \
+                openssl-devel \
+                readline-devel \
+                zlib-devel \
+                libffi-devel \
+                sqlite-devel \
+                git
+
+            ruby --version
+            bundle --version
+        fi
+
+        if [ "${REACTPACK}" = "Yes" ]; then
+            echo "Installing Node.js..."
+
+            dnf clean all
+            dnf install -y nodejs
+
+            node --version
+            npm --version
+        fi
+
+        ;;
+    arch)
+        echo "Arch Linux detected"
+
+        if [ "${DOCKERPACK}" = "Yes" ]; then
+            echo "Installing Docker..."
+
+            pacman -Syu --noconfirm
+            pacman -S --noconfirm docker
+
+            systemctl enable --now docker
+
+            docker --version
+
+            docker run hello-world
+        fi
+
+        if [ "${RUBYPACK}" = "Yes" ]; then
+            echo "Installing Ruby..."
+
+            pacman -S --noconfirm \
+                ruby \
+                ruby-bundler \
+                base-devel \
+                openssl \
+                readline \
+                zlib \
+                libffi \
+                sqlite \
+                git
+
+            ruby --version
+            bundle --version
+        fi
+
+        if [ "${REACTPACK}" = "Yes" ]; then
+            echo "Installing Node.js..."
+
+            pacman -S --noconfirm \
+                nodejs \
+                npm
+
+            node --version
+            npm --version
+        fi
+
+        ;;
+    debian)
+        echo "Debian detected"
+
+        export DEBIAN_FRONTEND=noninteractive
+
+        apt-get update
+
+        if [ "${DOCKERPACK}" = "Yes" ]; then
+            echo "Installing Docker..."
+
+            apt-get install -y \
+                ca-certificates \
+                curl \
+                gnupg
+
+            install -m 0755 -d /etc/apt/keyrings
+
+            curl -fsSL \
+                https://download.docker.com/linux/debian/gpg \
+                -o /etc/apt/keyrings/docker.asc
+
+            chmod a+r /etc/apt/keyrings/docker.asc
+
+            echo \
+                "deb [arch=\$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian \$(. /etc/os-release && echo "\${VERSION_CODENAME}") stable" \
+                > /etc/apt/sources.list.d/docker.list
+
+            apt-get update
+
+            apt-get install -y \
+                docker-ce \
+                docker-ce-cli \
+                containerd.io \
+                docker-buildx-plugin \
+                docker-compose-plugin
+
+            systemctl enable --now docker
+
+            docker --version
+            docker compose version
+
+            docker run hello-world
+        fi
+
+        if [ "${RUBYPACK}" = "Yes" ]; then
+            echo "Installing Ruby..."
+
+            apt-get install -y \
+                ruby \
+                ruby-dev \
+                bundler \
+                build-essential \
+                libssl-dev \
+                libreadline-dev \
+                zlib1g-dev \
+                libffi-dev \
+                libsqlite3-dev \
+                git
+
+            ruby --version
+            bundle --version
+        fi
+
+        if [ "${REACTPACK}" = "Yes" ]; then
+            echo "Installing Node.js..."
+
+            apt-get install -y \
+                nodejs \
+                npm
+
+            node --version
+            npm --version
+        fi
+
+        ;;
+
+    ubuntu)
+        echo "Ubuntu detected"
+
+        export DEBIAN_FRONTEND=noninteractive
+
+        apt-get update
+
+        if [ "${DOCKERPACK}" = "Yes" ]; then
+            echo "Installing Docker..."
+
+            apt-get install -y \
+                ca-certificates \
+                curl \
+                gnupg
+
+            install -m 0755 -d /etc/apt/keyrings
+
+            curl -fsSL \
+                https://download.docker.com/linux/ubuntu/gpg \
+                -o /etc/apt/keyrings/docker.asc
+
+            chmod a+r /etc/apt/keyrings/docker.asc
+
+            echo \
+                "deb [arch=\$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \$(. /etc/os-release && echo "\${VERSION_CODENAME}") stable" \
+                > /etc/apt/sources.list.d/docker.list
+
+            apt-get update
+
+            apt-get install -y \
+                docker-ce \
+                docker-ce-cli \
+                containerd.io \
+                docker-buildx-plugin \
+                docker-compose-plugin
+
+            systemctl enable --now docker
+
+            docker --version
+            docker compose version
+
+            docker run hello-world
+        fi
+
+        if [ "${RUBYPACK}" = "Yes" ]; then
+            echo "Installing Ruby..."
+
+            apt-get install -y \
+                ruby \
+                ruby-dev \
+                bundler \
+                build-essential \
+                libssl-dev \
+                libreadline-dev \
+                zlib1g-dev \
+                libffi-dev \
+                libsqlite3-dev \
+                git
+
+            ruby --version
+            bundle --version
+        fi
+
+        if [ "${REACTPACK}" = "Yes" ]; then
+            echo "Installing Node.js..."
+
+            apt-get install -y \
+                nodejs \
+                npm
+
+            node --version
+            npm --version
+        fi
+
+        ;;
+    opensuse-leap)
+        echo "openSUSE Leap detected"
+
+        zypper --non-interactive refresh
+
+        if [ "${DOCKERPACK}" = "Yes" ]; then
+            echo "Installing Docker..."
+
+            zypper --non-interactive install \
+                docker \
+                docker-compose
+
+            systemctl enable --now docker
+
+            docker --version
+
+            docker run hello-world
+        fi
+
+        if [ "${RUBYPACK}" = "Yes" ]; then
+            echo "Installing Ruby..."
+
+            zypper --non-interactive install \
+                ruby \
+                ruby-devel \
+                gcc \
+                gcc-c++ \
+                make \
+                openssl-devel \
+                readline-devel \
+                zlib-devel \
+                libffi-devel \
+                sqlite3-devel \
+                git
+
+            gem install bundler
+
+            ruby --version
+            bundle --version
+        fi
+
+        if [ "${REACTPACK}" = "Yes" ]; then
+            echo "Installing Node.js..."
+
+            zypper --non-interactive install \
+                nodejs \
+                npm
+
+            node --version
+            npm --version
+        fi
+
+        ;;
+
+    *)
+        echo "ERROR: Unsupported OS: \${ID}"
+        exit 1
+        ;;
+
+    esac
+
+SOFTPACKEOF
+
+fi              
+               
 
 #================================
 # Graphical desktop configuration
@@ -1350,7 +1773,7 @@ fi
 #========================================
 
 DISPLAY_ARGS=(
-    --graphics "vnc,listen=10.151.0.207,port=-1,password=secret12"
+    --graphics "vnc,listen=0.0.0.0,port=-1,password=secret12"
 )
 if [ "${GRAPHICAL}" = "Yes" ]; then
         echo "Graphical mode enabled"
@@ -1374,7 +1797,7 @@ if [ -n "${INTERNAL_NET_ONLY}" ]; then
     echo "Internal network only"
 
     NETWORK_ARGS+=(
-        --network "bridge=vm-secondary,mac=${INTERNAL_MAC}"
+        --network "network=secondary,mac=${INTERNAL_MAC}"
     )
 
 else
@@ -1389,7 +1812,7 @@ else
         echo "Adding internal network on bridge vm-secondary"
 
         NETWORK_ARGS+=(
-            --network "bridge=vm-secondary,mac=${INTERNAL_MAC}"
+            --network "network=secondary,mac=${INTERNAL_MAC}"
         )
     fi
 
@@ -1416,7 +1839,7 @@ virt-install \
 
 echo "Setting VNC password..."
 
-virsh --connect qemu:///session qemu-monitor-command "${VMNAME}" \
+virsh qemu-monitor-command "${VMNAME}" \
     --hmp "change vnc password secret12"
 EOF
 
@@ -1427,9 +1850,15 @@ echo "  ${CONFIGISO}"
 echo
 echo "=========================================="
 echo "VMNAME:              ${NAME}"
+if [ -n "${INTERNAL_NET_ONLY}" ]; then
+	echo "NETWORK MODE: Internal network only"
+	echo "INTERNAL MAC: ${INTERNAL_MAC}"
+	echo "INTERNAL IP:  ${INTERNAL_IP:-DHCP}"
+else
 echo "NETWORK MODE:        ${EXTERNAL_NETWORK_MODE}"
 echo "EXTERNAL MAC:         ${EXTERNAL_MAC}"
 echo "EXTERNAL IP:          ${EXTERNAL_IP:-DHCP}"
+fi
 echo "=========================================="
 if [[ $CONSOLE = "Yes" ]]; then
 	virsh console ${NAME}
@@ -1452,3 +1881,4 @@ fi
 echo
 echo "to connect to ${NAME} on your machine enter: open \"vnc://:secret12@$(hostname -s):${VNC_PORT}\""
 fi
+
