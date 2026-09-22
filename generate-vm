@@ -349,58 +349,7 @@ clear
 	    fi
     done
 
-clear
-while :
-do
-	read -r -p "Would you like the vm to boot with any software already installed? " softwarepacks
-	if [[ $softwarepacks = "yes" || $softwarepacks = "Yes" ]]; then
-		while :
-		do
-			read -r -p "Would you like the vm to boot with ruby and rails installed? " rubypack
-			if [[ $rubypack = "yes" || $rubypack = "Yes" ]]; then
-				RUBYPACK="Yes"
-				break
-			elif [[ $rubypack = "No" || $rubypack = "no" ]]; then
-				break
-			else
-				echo -e "${red}Error: invalid input: ${nc} $rubypack"
-			fi
-		done
 
-	clear
-
-	while :
-	do
-		read -r -p "Would you like the vm to boot with docker installed? " dockerpack
-		if [[ $dockerpack = "yes" || $dockerpack = "Yes" ]]; then
-			DOCKERPACK="Yes"
-			break
-		elif [[ $dockerpack = "no" || $dockerpack = "No" ]]; then
-			break
-		else
-			echo -e "${red}Error: invalid input: ${nc} $dockerpack"
-		fi
-	done
-
-	while :
-	do
-		read -r -p "Would you like the vm to boot with node installed? " reactpack
-		if [[ $reactpack = "Yes" || $reactpack = "yes" ]]; then
-			REACTPACK="Yes"
-			break
-		elif [[ $reactpack = "No" || $reactpack = "no" ]]; then
-			break
-		else
-			echo -e "${red}Error: invalid input: ${nc} $reactpack"
-		fi
-	done
-
-	elif [[ $softwarepacks = "No" || $softwarepacks = "no" ]]; then
-		break
-	else
-		echo -e "${red}Error: invalid input: ${nc} $softwarepacks"
-	fi
-done
 
 
 
@@ -813,7 +762,7 @@ fi
 if [ "$FETCH" = true ]; then
 	mkdir -p images
 	cd images
-	wget -O alma10.qcow2 https://repo.almalinux.org/almalinux/10/cloud/x86_64_v2/images/AlmaLinux-10-GenericCloud-latest.x86_64_v2.qcow2
+	wget -O alma10.qcow2 https://repo.almalinux.org/almalinux/10/cloud/x86_64/images/AlmaLinux-10-GenericCloud-latest.x86_64.qcow2
 	wget -O alma9.qcow2 https://repo.almalinux.org/almalinux/9/cloud/x86_64/images/AlmaLinux-9-GenericCloud-latest.x86_64.qcow2
 	wget -O alma8.qcow2 https://repo.almalinux.org/almalinux/8/cloud/x86_64/images/AlmaLinux-8-GenericCloud-latest.x86_64.qcow2
 	wget -O arch.qcow2 https://fastly.mirror.pkgbuild.com/images/v20260901.583572/Arch-Linux-x86_64-cloudimg.qcow2
@@ -1106,6 +1055,8 @@ hostname: ${NAME}
 fqdn: ${NAME}.dmz.alces-software.com
 public-keys:
   - ${SSH_PUBLIC_KEY}
+
+
 METAEOF
 
 cat <<'USEREOF' > \$USER
@@ -1126,7 +1077,10 @@ system_info:
     groups: [wheel, adm, systemd-journal]
     sudo: ["ALL=(ALL) NOPASSWD:ALL"]
     shell: /bin/bash
-
+runcmd:
+  - |
+    setenforce 0
+    sed -i 's/^SELINUX=.*/SELINUX=disabled/' /etc/selinux/config
 USEREOF
 
 if [ -n "${INTERNAL_NET_ONLY}" ]; then
@@ -1881,4 +1835,3 @@ fi
 echo
 echo "to connect to ${NAME} on your machine enter: open \"vnc://:secret12@$(hostname -s):${VNC_PORT}\""
 fi
-
