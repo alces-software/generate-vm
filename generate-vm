@@ -100,9 +100,6 @@ usage() {
   echo "      --console (Optional)                  Boots into virsh console making it easy to get the ssh address of the vm"
   echo "      --external-nodhcp (Optional) 		    Sets the primary network interface to static mode picking from ips 10.151.44.[10-250] instead of using DHCP"
   echo "      --internal-net-only (Optional)                Boots the vm with only a connection to the internal network"
-  echo "      --dockerpack (Optional) 			    Boots the vm with docker installed"
-  echo "      --rubypack (Optional)                         Boots the vm with ruby and rails installed"
-  echo "      --reactpack (Optional)                        Boots the vm with nodejs installed"
   echo "Commands:"
   echo "      --wizard                     Provides a guided virtual machine creation"
   echo "      --stop                       Stops the specified vm"
@@ -1083,6 +1080,99 @@ runcmd:
     sed -i 's/^SELINUX=.*/SELINUX=disabled/' /etc/selinux/config
 USEREOF
 
+
+#===============================
+# Custom CMD
+#===============================
+
+if [ -n "${CUSTOMCMD}" ]; then
+
+cat <<'CMDEOF' >> "\$USER"
+
+  - |
+    set -e
+    ${CUSTOMCMD}
+
+CMDEOF
+
+fi
+#================================
+# Graphical desktop configuration
+#================================
+if [ "${GRAPHICAL}" = "Yes" ]; then
+cat <<'GUIEOF' >> "\$USER"
+  - |
+    set -e
+
+    echo "Installing graphical desktop environment"
+
+    . /etc/os-release
+    echo "Detected OS: \${ID}"
+    echo "OS version: \${VERSION_ID}"
+
+    case "\${ID}" in
+
+    alma|almalinux|rocky|centos|rhel)
+      echo "RHEL-family OS detected"
+      dnf -y group install "Server with GUI"
+      dnf -y install gdm
+      systemctl unmask gdm.service
+      systemctl enable gdm.service
+      systemctl set-default graphical.target
+      systemctl enable --now gdm.service
+      ;;
+
+    arch)
+      echo "Arch Linux detected"
+      pacman -Syu --noconfirm gnome gdm xorg-server
+      systemctl unmask gdm.service
+      systemctl enable gdm.service
+      systemctl set-default graphical.target
+      systemctl enable --now gdm.service
+      ;;
+
+    debian)
+      echo "Debian detected"
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update
+      apt-get install -y task-gnome-desktop gdm3
+      systemctl unmask gdm3.service
+      systemctl set-default graphical.target
+      systemctl enable --now gdm3.service
+      ;;
+
+    ubuntu)
+      echo "Ubuntu detected"
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update
+      apt-get install -y gnome-shell gnome-session gnome-terminal gdm3
+      systemctl unmask gdm3.service
+      systemctl set-default graphical.target
+      systemctl enable --now gdm3.service
+      ;;
+
+    opensuse-leap)
+      echo "openSUSE Leap detected"
+      zypper --non-interactive refresh
+      zypper --non-interactive install -t pattern gnome
+      zypper --non-interactive install gdm gnome-terminal firefox nautilus
+      systemctl unmask gdm.service
+      systemctl set-default graphical.target
+      systemctl enable --now gdm.service
+      ;;
+
+    *)
+      echo "ERROR: Unsupported OS: \${ID}"
+      exit 1
+      ;;
+
+    esac
+
+    echo "GUI installed"
+    systemctl get-default
+GUIEOF
+
+fi
 if [ -n "${INTERNAL_NET_ONLY}" ]; then
 cat <<'NTPEOF' >> "\$USER"
 ntp:
@@ -1179,97 +1269,7 @@ if [ -n "${INTERNAL_IP}" ]; then
       - ${INTERNAL_IP}/24
 NETEOF
 fi
-#===============================
-# Custom CMD
-#===============================
 
-if [ -n "${CUSTOMCMD}" ]; then
-
-cat <<'CMDEOF' >> "\$USER"
-
-  - |
-    set -e
-    ${CUSTOMCMD}
-
-CMDEOF
-
-fi
-#================================
-# Graphical desktop configuration
-#================================
-if [ "${GRAPHICAL}" = "Yes" ]; then
-cat <<'GUIEOF' >> "\$USER"
-  - |
-    set -e
-
-    echo "Installing graphical desktop environment"
-
-    . /etc/os-release
-    echo "Detected OS: \${ID}"
-    echo "OS version: \${VERSION_ID}"
-
-    case "\${ID}" in
-
-    alma|almalinux|rocky|centos|rhel)
-      echo "RHEL-family OS detected"
-      dnf -y group install "Server with GUI"
-      dnf -y install gdm
-      systemctl unmask gdm.service
-      systemctl enable gdm.service
-      systemctl set-default graphical.target
-      systemctl enable --now gdm.service
-      ;;
-
-    arch)
-      echo "Arch Linux detected"
-      pacman -Syu --noconfirm gnome gdm xorg-server
-      systemctl unmask gdm.service
-      systemctl enable gdm.service
-      systemctl set-default graphical.target
-      systemctl enable --now gdm.service
-      ;;
-
-    debian)
-      echo "Debian detected"
-      export DEBIAN_FRONTEND=noninteractive
-      apt-get update
-      apt-get install -y task-gnome-desktop gdm3
-      systemctl unmask gdm3.service
-      systemctl set-default graphical.target
-      systemctl enable --now gdm3.service
-      ;;
-
-    ubuntu)
-      echo "Ubuntu detected"
-      export DEBIAN_FRONTEND=noninteractive
-      apt-get update
-      apt-get install -y gnome-shell gnome-session gnome-terminal gdm3
-      systemctl unmask gdm3.service
-      systemctl set-default graphical.target
-      systemctl enable --now gdm3.service
-      ;;
-
-    opensuse-leap)
-      echo "openSUSE Leap detected"
-      zypper --non-interactive refresh
-      zypper --non-interactive install -t pattern gnome
-      zypper --non-interactive install gdm gnome-terminal firefox nautilus
-      systemctl unmask gdm.service
-      systemctl set-default graphical.target
-      systemctl enable --now gdm.service
-      ;;
-
-    *)
-      echo "ERROR: Unsupported OS: \${ID}"
-      exit 1
-      ;;
-
-    esac
-
-    echo "GUI installed"
-    systemctl get-default
-GUIEOF
-fi
 
 echo "net config"
 cat "\$NET"
