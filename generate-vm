@@ -12,7 +12,7 @@ DEFAULT_USER=""
 # Configuration
 # ---------------------------------------------------------------------------
 
-VMPATH="/opt/vm"
+VMPATH="/home/rnd/home/vm"
 EXTERNALBRIDGE="ext"
 ALMA10_RAWIMAGE="/home/rnd/virsh-generator/images/alma10.qcow2"
 ALMA9_RAWIMAGE="/home/rnd/virsh-generator/images/alma9.qcow2"
@@ -100,11 +100,12 @@ usage() {
   echo "      --console (Optional)                  Boots into virsh console making it easy to get the ssh address of the vm"
   echo "      --external-nodhcp (Optional) 		    Sets the primary network interface to static mode picking from ips 10.151.44.[10-250] instead of using DHCP"
   echo "      --internal-net-only (Optional)                Boots the vm with only a connection to the internal network"
+  echo "      --physical-api (Optional)                     Boots the vm setting up the logical API, requires input of the tag of the api"
+  echo "      --logical-api (Optional)                      Boots the vm setting up the physical API, requires input of the tag of the api"
   echo "Commands:"
   echo "      --wizard                     Provides a guided virtual machine creation"
   echo "      --stop                       Stops the specified vm"
-  echo "      --destroy                    Destroys and undefines specified vm"
-  echo "      --cleanup                    Deletes qcow2 and _config.iso of specified vm"
+  echo "      --destroy                    Destroys and undefines specified vm" 
   echo "      --recreate                   Destroys, undefines, deletes qcow2 and _config.iso of specified vm that creates vm again"
   echo "  -h, --help                       Show this help"
   echo "      --fetch                      Fetches all VM Images from sources"
@@ -631,19 +632,23 @@ while [[ $# -gt 0 ]]; do
 	INTERNAL_NET_ONLY="Yes"
 	shift
 	;;
-   --dockerpack)
-	DOCKERPACK="Yes"
+   --physical-api)
+   	PHYSICAL_API="$2"
+	shift 2
+	;;
+   --physical-api=*)
+	PHYSICAL_API="${1#*=}"
 	shift
 	;;
-   --rubypack)
-	RUBYPACK="Yes"
-	shift
+   --logical-api)
+   	LOGICAL_API="$2"
+	shift 2
 	;;
-   --reactpack)
-	REACTPACK="Yes"
-	shift
-	;;
-    *)
+   --logical-api=*)
+       LOGICAL_API="${1#*=}"
+       shift
+       ;;	
+      *)
       error "Unknown option: $1"
       ;;
   esac
@@ -707,9 +712,9 @@ if [ "$DESTROY_VM" = true ]; then
 	  read -p "Please confirm you wish to cleanup files related to $NAME and release it's IP (Y/N) : " cleanup_confirm
 	  if [ "$cleanup_confirm" = "Y" ] || [ "$cleanup_confirm" = "y" ]; then
 		echo "Cleaning up $NAME\'s files"
-		rm -f /opt/vm/${NAME}_config.iso
-		rm -f /opt/vm/${NAME}.qcow2
-		rm -f /opt/vm/${NAME}-disk2.qcow2
+		rm -f /home/rnd/home/vm/${NAME}_config.iso
+		rm -f /home/rnd/home/vm/${NAME}.qcow2
+		rm -f /home/rnd/home/vm/${NAME}-disk2.qcow2
 		release_primary_ip "${NAME}"
 		exit 0
 	  elif [ "$cleanup_confirm" = "N" ] || [ "$cleanup_confirm" = "n" ]; then
@@ -1096,6 +1101,88 @@ cat <<'CMDEOF' >> "\$USER"
 CMDEOF
 
 fi
+
+if [ -n "$PHYSICAL_API" ] || [ -n "$LOGICAL_API" ]; then
+
+cat <<'DOCKEOF' >> "\$USER"
+  - |
+    set -e
+    . /etc/os-release
+    echo "Detected OS: \${ID}"
+    case "\${ID}" in
+      alma|almalinux|rocky|centos)
+        dnf -y remove 'kernel-debug*' || true
+        dnf -y install dnf-plugins-core git "kernel-modules-extra-\$(uname -r)"
+        dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo
+        dnf install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+        modprobe -a overlay br_netfilter nf_tables
+        systemctl enable --now docker || { journalctl -u docker --no-pager | tail -30; exit 1; }
+        ;;
+      arch)
+        pacman -Sy --noconfirm
+        modprobe -a overlay br_netfilter nf_tables
+        pacman -S --noconfirm --needed docker docker-compose docker-buildx git
+        systemctl enable --now docker.service || { journalctl -u docker --no-pager | tail -30; exit 1; }
+        ;;
+      debian|ubuntu)
+        apt-get update
+        apt-get install -y ca-certificates curl git
+        install -m 0755 -d /etc/apt/keyrings
+        curl -fsSL "https://download.docker.com/linux/\${ID}/gpg" -o /etc/apt/keyrings/docker.asc
+        chmod a+r /etc/apt/keyrings/docker.asc
+        tee /etc/apt/sources.list.d/docker.sources <<EOF
+    Types: deb
+    URIs: https://download.docker.com/linux/\${ID}
+    Suites: \$(. /etc/os-release && echo "\${UBUNTU_CODENAME:-\$VERSION_CODENAME}")
+    Components: stable
+    Architectures: \$(dpkg --print-architecture)
+    Signed-By: /etc/apt/keyrings/docker.asc
+    EOF
+        apt-get update
+        apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+        systemctl enable --now docker
+        ;;
+      opensuse-leap)
+        zypper refresh
+        zypper install -y docker docker-compose docker-buildx git
+        systemctl enable --now docker
+        ;;
+      *)
+        echo "ERROR: unsupported OS detected" >&2
+        exit 1
+        ;;
+    esac
+DOCKEOF
+fi
+if [ -n "$PHYSICAL_API" ]; then
+cat <<'PHYSEOF' >> "\$USER"
+  - |
+    set -e
+    git clone https://gitlab.dmz.alces.network/dev/alces-blueprint-physical.git
+    cd alces-blueprint-physical
+    git checkout tags/$PHYSICAL_API
+    git -c url."https:///gitlab+deploy-token-6:DEPLOYTOKEN@gitlab/".insteadOf="git@gitlab.dmz.alces.network:" submodule update --init --recursive
+    cd api
+    docker compose up -d
+PHYSEOF
+fi
+
+if [ -n "$LOGICAL_API" ]; then
+cat <<'LOGIEOF' >> "\$USER"
+  - |
+    set -e
+    if [ -n "$PHYSICAL_API" ]; then
+      cd ..
+    fi
+    git clone https://gitlab.dmz.alces.network/dev/alces-blueprint-logical.git
+    cd alces-blueprint-logical
+    git checkout tags/$LOGICAL_API
+    git -c url."https:///gitlab+deploy-token-6:DEPLOYTOKEN@gitlab/".insteadOf="git@gitlab.dmz.alces.network:" submodule update --init --recursive
+    cd API
+    docker compose up -d
+LOGIEOF
+fi
+
 #================================
 # Graphical desktop configuration
 #================================
@@ -1209,7 +1296,6 @@ fs_setup:
   device: /dev/vdb
   partition: auto
 DISKEOF
-
 if [ "${FILE_SHARING}" = "Yes" ]; then
     # Add another item to the existing mounts list
     cat <<'DISKEOF' >> "\$USER"
@@ -1383,6 +1469,7 @@ else
             --console pty,target_type=serial
         )
 fi
+
 
 #===========================================
 # Virt-install command
